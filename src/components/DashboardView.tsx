@@ -1,269 +1,264 @@
 import React, { useMemo } from 'react';
-import type { Trend, ScannerBot, LogEntry } from '../types';
-import { 
-  Activity, 
-  TrendingUp, 
-  Terminal, 
-  Hash, 
-  Trash2, 
-  BarChart2,
-  TrendingDown
-} from 'lucide-react';
+import type { Trend, ScannerBot, LogEntry, TrendAlert } from '../types';
+import { Activity, TrendingUp, Terminal, Trash2, Zap, Target } from 'lucide-react';
 import { BrandIcon } from './BrandIcon';
 
 interface DashboardViewProps {
   trends: Trend[];
   bots: ScannerBot[];
   logs: LogEntry[];
-  onToggleBot: (botId: string) => void;
+  alerts: TrendAlert[];
+  hotLeadCount: number;
   onClearLogs: () => void;
   onViewTrendDetails: (trend: Trend) => void;
+  onGoToLeads: () => void;
 }
 
+const PLATFORM_COLORS: Record<string, string> = {
+  twitter: 'var(--platform-twitter)',
+  instagram: 'var(--platform-instagram)',
+  youtube: 'var(--platform-youtube)',
+};
+
+const HEAT_CLASS = (score: number) =>
+  score >= 90 ? 'fire' : score >= 75 ? 'hot' : score >= 55 ? 'rising' : 'cool';
+
+const TREND_TYPE_ICONS: Record<string, string> = {
+  breaking: '🔴',
+  controversial: '⚡',
+  viral: '🚀',
+  uprising: '📡',
+  fading: '📉',
+};
+
 export const DashboardView: React.FC<DashboardViewProps> = ({
-  trends,
-  bots,
-  logs,
-  onClearLogs,
-  onViewTrendDetails
+  trends, bots, logs, alerts, hotLeadCount, onClearLogs, onViewTrendDetails, onGoToLeads
 }) => {
-  // Stat calculations
-  const totalBots = bots.length;
   const activeBots = bots.filter(b => b.status !== 'idle').length;
-  
-  const totalTrackers = useMemo(() => {
-    const allKeywords = bots.flatMap(b => b.trackers);
-    return new Set(allKeywords).size;
-  }, [bots]);
+  const totalBots = bots.length;
 
-  const highGrowthCount = useMemo(() => {
-    return trends.filter(t => t.growth > 100).length;
-  }, [trends]);
+  const trendBots = bots.filter(b => b.mode === 'trend');
+  const totalSignals = trendBots.reduce((s, b) => s + b.signalsDetected, 0);
+  const emergingCount = trends.filter(t => t.emergenceScore >= 55 && t.volume < 300000).length;
 
-  const topCategory = useMemo(() => {
-    const counts: Record<string, number> = {};
-    trends.forEach(t => {
-      counts[t.category] = (counts[t.category] || 0) + t.volume;
-    });
-    let bestCat = 'None';
-    let bestVal = 0;
-    Object.entries(counts).forEach(([cat, val]) => {
-      if (val > bestVal) {
-        bestVal = val;
-        bestCat = cat;
-      }
-    });
-    return bestCat;
-  }, [trends]);
+  const topTrend = useMemo(() => [...trends].sort((a, b) => b.heatScore - a.heatScore)[0], [trends]);
 
-  // Aggregate platforms share across all trends
-  const platformShare = useMemo(() => {
-    let tw = 0, ig = 0, yt = 0;
-    trends.forEach(t => {
-      tw += t.volume * (t.platforms.twitter / 100);
-      ig += t.volume * (t.platforms.instagram / 100);
-      yt += t.volume * (t.platforms.youtube / 100);
-    });
-    const total = tw + ig + yt || 1;
+  // Platform columns: top 3 per platform by heat score
+  const platformTrends = useMemo(() => {
+    const byPlatform = (p: string) =>
+      [...trends]
+        .filter(t => t.platformOrigin === p || t.platforms[p as keyof typeof t.platforms] >= 30)
+        .sort((a, b) => b.heatScore - a.heatScore)
+        .slice(0, 4);
     return {
-      twitter: Math.round((tw / total) * 100),
-      instagram: Math.round((ig / total) * 100),
-      youtube: Math.round((yt / total) * 100),
+      twitter: byPlatform('twitter'),
+      instagram: byPlatform('instagram'),
+      youtube: byPlatform('youtube'),
     };
   }, [trends]);
 
-  // Sort and pick top 3 trends by volume
-  const topTrends = useMemo(() => {
-    return [...trends].sort((a, b) => b.volume - a.volume).slice(0, 3);
-  }, [trends]);
+  // Alert ticker items (duplicate for seamless scroll)
+  const tickerItems = useMemo(() => {
+    const items = alerts
+      .filter(a => !a.dismissed)
+      .slice(0, 6)
+      .map(a => ({
+        label: a.trend?.name || 'Lead Alert',
+        msg: a.message.slice(0, 50),
+      }));
+    if (items.length === 0) {
+      return [
+        { label: '#BlockTheBot', msg: 'Surging +643% · 4 watched accounts active' },
+        { label: 'MrBeast Production Leak', msg: '🔥 Critical · 1.2M mentions · YouTube' },
+        { label: 'OpenAI Exodus', msg: 'Breaking · +1192% in 6h' },
+        { label: 'Deinfluencing 2.0', msg: 'Instagram surging · 448k mentions' },
+      ];
+    }
+    return items;
+  }, [alerts]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
-      
-      {/* Stats Widgets */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+      {/* Alert Ticker */}
+      <div className="alert-ticker-wrap">
+        <div className="alert-ticker-label">
+          <span className="status-dot-pulse" style={{ width: 6, height: 6 }} />
+          LIVE
+        </div>
+        <div style={{ overflow: 'hidden', flex: 1 }}>
+          <div className="alert-ticker-track">
+            {[...tickerItems, ...tickerItems].map((item, i) => (
+              <span key={i} className="alert-ticker-item">
+                <strong>{item.label}</strong> — {item.msg}
+                <span style={{ color: 'rgba(255,255,255,0.15)', marginLeft: '1rem' }}>·</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Stats Row */}
       <div className="stats-grid">
         <div className="glass-panel stat-widget">
           <div>
             <span className="stat-label">Active Scanners</span>
             <div className="stat-val">{activeBots}<span style={{ color: 'var(--text-muted)', fontSize: '1.25rem', fontWeight: 500 }}>/{totalBots}</span></div>
-            <div className="stat-change up" style={{ color: activeBots > 0 ? 'var(--success)' : 'var(--text-muted)' }}>
-              <span className="status-dot-pulse" style={{ animationDuration: '2s', width: '6px', height: '6px', display: activeBots > 0 ? 'inline-block' : 'none' }}></span>
-              {activeBots > 0 ? 'Scanning Feeds Live' : 'All Bots Idle'}
-            </div>
-          </div>
-          <div className="stat-icon-wrapper">
-            <Activity size={20} />
-          </div>
-        </div>
-
-        <div className="glass-panel stat-widget">
-          <div>
-            <span className="stat-label">Tracked Keywords</span>
-            <div className="stat-val">{totalTrackers}</div>
             <div className="stat-change up">
-              <TrendingUp size={12} /> Live Scraper Filters
+              <span className="status-dot-pulse" style={{ width: 6, height: 6 }} />
+              Scanning Feeds Live
             </div>
           </div>
-          <div className="stat-icon-wrapper">
-            <Hash size={20} />
-          </div>
+          <div className="stat-icon-wrapper"><Activity size={20} /></div>
         </div>
 
         <div className="glass-panel stat-widget">
           <div>
-            <span className="stat-label">Surging Trends</span>
-            <div className="stat-val">{highGrowthCount}</div>
-            <div className="stat-change up" style={{ color: 'var(--accent-pink)' }}>
-              <TrendingUp size={12} /> Growth rate &gt; 100%
-            </div>
+            <span className="stat-label">Signals Detected</span>
+            <div className="stat-val">{totalSignals}</div>
+            <div className="stat-change up"><TrendingUp size={12} /> Emergence signals</div>
           </div>
-          <div className="stat-icon-wrapper">
-            <TrendingUp size={20} />
-          </div>
+          <div className="stat-icon-wrapper"><Zap size={20} /></div>
         </div>
 
         <div className="glass-panel stat-widget">
           <div>
-            <span className="stat-label">Dominant Niche</span>
-            <div className="stat-val" style={{ fontSize: '1.25rem', marginTop: '1rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '170px' }}>
-              {topCategory}
-            </div>
+            <span className="stat-label">Early Signals</span>
+            <div className="stat-val" style={{ color: 'var(--accent-blue)' }}>{emergingCount}</div>
             <div className="stat-change" style={{ color: 'var(--accent-blue)' }}>
-              <BarChart2 size={12} /> By Total Scan volume
+              <TrendingUp size={12} /> Pre-viral trends
             </div>
           </div>
-          <div className="stat-icon-wrapper">
-            <BarChart2 size={20} />
+          <div className="stat-icon-wrapper" style={{ color: 'var(--accent-blue)' }}><TrendingUp size={20} /></div>
+        </div>
+
+        <div
+          className="glass-panel stat-widget"
+          style={{ cursor: 'pointer' }}
+          onClick={onGoToLeads}
+        >
+          <div>
+            <span className="stat-label">Hot Leads</span>
+            <div className="stat-val" style={{ color: hotLeadCount > 0 ? '#f87171' : undefined }}>{hotLeadCount}</div>
+            <div className="stat-change" style={{ color: hotLeadCount > 0 ? '#f87171' : 'var(--text-muted)' }}>
+              🎯 View Lead Radar →
+            </div>
           </div>
+          <div className="stat-icon-wrapper" style={{ color: '#f87171' }}><Target size={20} /></div>
         </div>
       </div>
 
-      {/* Main Panel Content: Chart & Ticker/Console */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(450px, 1fr))', gap: '1.5rem' }}>
-        
-        {/* Left Column: Live Analytics Overview */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          
-          {/* Top Trends Widget */}
-          <div className="glass-panel" style={{ padding: '1.5rem' }}>
-            <h3 style={{ fontSize: '1rem', textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <TrendingUp size={16} className="color-twitter" /> Top Velocity Social Trends
-            </h3>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              {topTrends.map((trend) => (
-                <div 
-                  key={trend.id} 
-                  className="glass-card" 
-                  style={{ padding: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
-                  onClick={() => onViewTrendDetails(trend)}
-                >
-                  <div>
-                    <span className="trend-category-tag" style={{ fontSize: '0.7rem' }}>{trend.category}</span>
-                    <h4 style={{ fontSize: '1rem', fontWeight: 700, marginTop: '0.2rem' }}>{trend.name}</h4>
-                    <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-                      Scan Volume: {(trend.volume).toLocaleString()} mentions
-                    </p>
-                  </div>
-                  
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', color: trend.growth > 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 700, fontSize: '0.9rem' }}>
-                      {trend.growth > 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-                      +{trend.growth}%
+      {/* Platform Columns + Console */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1.25rem' }}>
+        {(['twitter', 'instagram', 'youtube'] as const).map(platform => {
+          const platformTrendList = platformTrends[platform];
+          return (
+            <div key={platform} className="glass-panel" style={{ overflow: 'hidden' }}>
+              <div className="platform-col-header" style={{ color: PLATFORM_COLORS[platform] }}>
+                <BrandIcon platform={platform} size={14} />
+                {platform === 'twitter' ? 'X / Twitter' : platform === 'instagram' ? 'Instagram' : 'YouTube'}
+                <span style={{ marginLeft: 'auto', fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 500 }}>
+                  {platformTrendList.length} trends
+                </span>
+              </div>
+              <div className="platform-col-body">
+                {platformTrendList.map(t => (
+                  <div
+                    key={t.id}
+                    className={`platform-trend-pill ${t.heatScore >= 90 ? 'heat-critical' : t.heatScore >= 75 ? 'heat-high' : t.heatScore >= 55 ? 'heat-medium' : ''}`}
+                    onClick={() => onViewTrendDetails(t)}
+                  >
+                    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: PLATFORM_COLORS[platform], opacity: 0.4 }} />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.4rem' }}>
+                      <span className={`trend-type-badge ${t.trendType}`}>
+                        {TREND_TYPE_ICONS[t.trendType]} {t.trendType}
+                      </span>
+                      <span className={`heat-badge ${HEAT_CLASS(t.heatScore)}`}>🌡 {t.heatScore}</span>
                     </div>
-                    <span className="momentum-badge surging" style={{ fontSize: '0.6rem', marginTop: '0.25rem', display: 'inline-block', padding: '0.1rem 0.4rem' }}>
-                      {trend.momentum}
-                    </span>
+                    <div className="platform-trend-pill-name">{t.name}</div>
+                    <div className="platform-trend-pill-meta">
+                      <span>{(t.volume / 1000).toFixed(0)}k mentions</span>
+                      <span style={{ color: t.growth > 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 700 }}>
+                        +{t.growth.toLocaleString()}%
+                      </span>
+                      {t.firstSeenBy.length > 0 && (
+                        <span style={{ marginLeft: 'auto' }}>via {t.firstSeenBy[0]}</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Emerging Alpha + Console Row */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
+        {/* Emerging / Early Signal Feed */}
+        <div className="glass-panel" style={{ padding: '1.25rem' }}>
+          <h3 style={{ fontSize: '0.85rem', textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', letterSpacing: '0.05em' }}>
+            <span style={{ color: 'var(--accent-blue)' }}>📡</span> Early Signal Radar — Pre-Viral
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {[...trends]
+              .filter(t => t.emergenceScore >= 50 && t.emergenceScore < 80)
+              .sort((a, b) => b.emergenceScore - a.emergenceScore)
+              .slice(0, 4)
+              .map(t => (
+                <div key={t.id} className="glass-card" style={{ padding: '0.85rem 1rem', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                  onClick={() => onViewTrendDetails(t)}>
+                  <div>
+                    <div style={{ fontSize: '0.88rem', fontWeight: 700 }}>{t.name}</div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                      {t.signalAccountCount} accounts · {t.predictedPeak}
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.1rem' }}>
+                      First seen by {t.firstSeenBy[0] || 'unknown'}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--accent-blue)', fontWeight: 700 }}>
+                      📡 {t.emergenceScore}
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>emergence</div>
                   </div>
                 </div>
               ))}
-            </div>
-          </div>
-
-          {/* Platform Share Overview */}
-          <div className="glass-panel" style={{ padding: '1.5rem' }}>
-            <h3 style={{ fontSize: '1rem', textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '1.25rem' }}>
-              Platform Scanner Density
-            </h3>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--platform-twitter)', fontWeight: 600 }}>
-                    <BrandIcon platform="twitter" size={14} /> Twitter / X Scrapers
-                  </span>
-                  <span style={{ fontWeight: 700 }}>{platformShare.twitter}%</span>
-                </div>
-                <div className="demog-bar-outer" style={{ height: '8px' }}>
-                  <div className="demog-bar-inner" style={{ width: `${platformShare.twitter}%`, background: 'var(--platform-twitter)' }}></div>
-                </div>
+            {trends.filter(t => t.emergenceScore >= 50 && t.emergenceScore < 80).length === 0 && (
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', padding: '1.5rem 0' }}>
+                No early signals at the moment — all trends are established.
               </div>
-
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--platform-instagram)', fontWeight: 600 }}>
-                    <BrandIcon platform="instagram" size={14} /> Instagram API Scanners
-                  </span>
-                  <span style={{ fontWeight: 700 }}>{platformShare.instagram}%</span>
-                </div>
-                <div className="demog-bar-outer" style={{ height: '8px' }}>
-                  <div className="demog-bar-inner" style={{ width: `${platformShare.instagram}%`, background: 'linear-gradient(90deg, #f39c12, #e1306c, #9b59b6)' }}></div>
-                </div>
-              </div>
-
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: 'var(--platform-youtube)', fontWeight: 600 }}>
-                    <BrandIcon platform="youtube" size={14} /> YouTube Semantic Bots
-                  </span>
-                  <span style={{ fontWeight: 700 }}>{platformShare.youtube}%</span>
-                </div>
-                <div className="demog-bar-outer" style={{ height: '8px' }}>
-                  <div className="demog-bar-inner" style={{ width: `${platformShare.youtube}%`, background: 'var(--platform-youtube)' }}></div>
-                </div>
-              </div>
-            </div>
+            )}
           </div>
         </div>
 
-        {/* Right Column: Live Terminal Console Logs */}
+        {/* Live Console */}
         <div className="glass-panel console-panel">
           <div className="console-header">
             <span className="console-title">
-              <Terminal size={16} className="color-twitter" /> Real-time Scanner Output
+              <Terminal size={15} className="color-twitter" /> Scanner Output
             </span>
-            <button 
-              className="btn btn-secondary" 
-              style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
-              onClick={onClearLogs}
-              title="Clear Terminal logs"
-            >
-              <Trash2 size={12} /> Clear Logs
+            <button className="btn btn-secondary" style={{ padding: '0.25rem 0.5rem', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}
+              onClick={onClearLogs}>
+              <Trash2 size={11} /> Clear
             </button>
           </div>
-
           <div className="console-body">
             {logs.length === 0 ? (
-              <div style={{ color: 'var(--text-muted)', textAlign: 'center', marginTop: '4rem', fontStyle: 'italic' }}>
-                &gt;_ Awaiting scanner pipelines to initialize...
+              <div style={{ color: 'var(--text-muted)', textAlign: 'center', marginTop: '3rem', fontStyle: 'italic' }}>
+                &gt;_ Awaiting scanner pipelines...
               </div>
             ) : (
-              logs.map((log) => (
+              logs.map(log => (
                 <div key={log.id} className={`log-line ${log.type === 'success' ? 'success' : ''} ${log.type === 'alert' ? 'alert' : ''}`}>
                   <span className="log-time">[{log.timestamp}]</span>
-                  <span className={`log-tag ${log.platform}`}>
-                    {log.botName.split('-')[0].toLowerCase()}
-                  </span>
-                  <span className="log-message">
-                    {log.type === 'alert' ? '💥 ' : ''}
-                    {log.message}
-                  </span>
+                  <span className={`log-tag ${log.platform}`}>{log.botName.split('-')[0].toLowerCase()}</span>
+                  <span className="log-message">{log.message}</span>
                 </div>
               ))
             )}
           </div>
         </div>
-
       </div>
     </div>
   );
