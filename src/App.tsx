@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { useTrendSimulator } from './hooks/useTrendSimulator';
 import { DashboardView } from './components/DashboardView';
 import { DirectoryView } from './components/DirectoryView';

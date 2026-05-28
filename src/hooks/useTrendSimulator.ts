@@ -139,7 +139,7 @@ function computeLeadScore(
   ));
 }
 
-function generateOutreach(post: SimulatedPost, intentType: IntentSignalType, profile: BuyerProfile, business: BusinessProfile): string {
+function generateOutreach(post: SimulatedPost, _intentType: IntentSignalType, profile: BuyerProfile, business: BusinessProfile): string {
   const handle = post.userHandle;
   const biz = business.businessName;
   const tier = profile.purchasingPowerTier;
@@ -200,9 +200,66 @@ export const useTrendSimulator = () => {
         );
       }, index * 400);
     });
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Trend Intelligence Engine ────────────────────────────────────────────
+  // ── Seed Initial Leads on Mount ──────────────────────────────────────────
+  useEffect(() => {
+    const leadBot = INITIAL_BOTS.find(b => b.mode === 'intent');
+    if (!leadBot) return;
+
+    SIMULATED_INTENT_POSTS.forEach((post, index) => {
+      setTimeout(() => {
+        const intentType = classifyIntent(post.postContent);
+        if (!intentType) return;
+
+        const buyerProfile = computeBuyerProfile(post);
+        const leadScore = computeLeadScore(post, intentType, buyerProfile);
+
+        // Use the default threshold (30) for seeding
+        if (leadScore < 30) return;
+
+        processedPostIds.current.add(post.id);
+        const isHot = leadScore >= 80;
+
+        const lead: BuyerLead = {
+          id: `lead_seed_${post.id}`,
+          post: {
+            id: post.id,
+            platform: post.platform,
+            userHandle: post.userHandle,
+            userDisplayName: post.userDisplayName,
+            userAvatar: post.userAvatar,
+            userFollowers: post.userFollowers,
+            isPublicAccount: post.isPublicAccount,
+            postContent: post.postContent,
+            postUrl: post.postUrl,
+            postedAt: `${post.postedMinutesAgo}min ago`,
+            likes: post.likes,
+            reposts: post.reposts,
+            replies: post.replies,
+          },
+          buyerProfile,
+          intentType,
+          productCategory: DEFAULT_BUSINESS_PROFILE.targetKeywords[0] || 'Tech',
+          detectedKeywords: Object.entries(INTENT_PATTERNS)
+            .filter(([k]) => k === intentType)
+            .flatMap(([, patterns]) => patterns.filter(p => post.postContent.toLowerCase().includes(p.toLowerCase()))),
+          leadScore,
+          purchasingPowerScore: buyerProfile.purchasingPowerScore,
+          urgencyLevel: leadScore >= 85 ? 'critical' : leadScore >= 70 ? 'high' : leadScore >= 50 ? 'medium' : 'low',
+          detectedAt: 'Just now',
+          matchedBusinessTypes: [DEFAULT_BUSINESS_PROFILE.category],
+          suggestedOutreach: generateOutreach(post, intentType, buyerProfile, DEFAULT_BUSINESS_PROFILE),
+          status: 'new',
+          isHot,
+        };
+
+        setLeads(prev => [lead, ...prev]);
+      }, index * 350 + 800);
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+
   useEffect(() => {
     const interval = setInterval(() => {
       const trendBots = bots.filter(b => b.status !== 'idle' && b.mode === 'trend');
@@ -350,7 +407,7 @@ export const useTrendSimulator = () => {
           userFollowers: post.userFollowers,
           isPublicAccount: post.isPublicAccount,
           postContent: post.postContent,
-          postUrl: `https://${post.platform}.com/${post.userHandle.replace('@', '')}`,
+          postUrl: post.postUrl,
           postedAt: `${post.postedMinutesAgo}min ago`,
           likes: post.likes,
           reposts: post.reposts,

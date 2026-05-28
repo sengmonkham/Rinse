@@ -62,20 +62,46 @@ const LeadCard: React.FC<LeadCardProps> = ({ lead, onUpdateStatus, onCopy }) => 
 
       {/* Platform + Intent badges */}
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-        <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+        <a
+          href={`https://${lead.post.platform}.com/${lead.post.userHandle.replace('@', '')}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.75rem', color: 'var(--text-muted)', textDecoration: 'none' }}
+        >
           <BrandIcon platform={lead.post.platform} size={12} />
-          {lead.post.platform.charAt(0).toUpperCase() + lead.post.platform.slice(1)}
-        </span>
+          {lead.post.platform.charAt(0).toUpperCase() + lead.post.platform.slice(1)} ↗
+        </a>
         <span className={`intent-badge ${lead.intentType.replace(/_/g, '-')}`}>
           {INTENT_LABELS[lead.intentType]}
         </span>
         <span style={{ marginLeft: 'auto', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-          {lead.post.postedAt} · {lead.detectedAt}
+          {lead.post.postedAt} · detected {lead.detectedAt}
         </span>
       </div>
 
-      {/* Post content */}
-      <div className="lead-post-text">"{lead.post.postContent}"</div>
+      {/* Post content — clicking opens the original post */}
+      <a
+        href={lead.post.postUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ textDecoration: 'none' }}
+        onClick={() => onUpdateStatus(lead.id, 'viewed')}
+      >
+        <div className="lead-post-text" style={{ cursor: 'pointer', transition: 'border-color 0.15s ease' }}
+          onMouseEnter={e => (e.currentTarget.style.borderLeftColor = 'var(--primary-bright)')}
+          onMouseLeave={e => (e.currentTarget.style.borderLeftColor = 'rgba(255,255,255,0.06)')}
+        >
+          "{lead.post.postContent}"
+          <span style={{ display: 'block', marginTop: '0.4rem', fontSize: '0.7rem', color: 'var(--primary-bright)', fontStyle: 'normal', fontWeight: 600 }}>↗ View original post</span>
+        </div>
+      </a>
+
+      {/* Engagement signals */}
+      <div style={{ display: 'flex', gap: '1rem', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+        <span>❤️ {lead.post.likes.toLocaleString()}</span>
+        <span>🔁 {lead.post.reposts.toLocaleString()}</span>
+        <span>💬 {lead.post.replies.toLocaleString()}</span>
+      </div>
 
       {/* Purchasing Power Section */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>

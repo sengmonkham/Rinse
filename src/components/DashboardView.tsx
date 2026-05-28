@@ -41,8 +41,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const totalSignals = trendBots.reduce((s, b) => s + b.signalsDetected, 0);
   const emergingCount = trends.filter(t => t.emergenceScore >= 55 && t.volume < 300000).length;
 
-  const topTrend = useMemo(() => [...trends].sort((a, b) => b.heatScore - a.heatScore)[0], [trends]);
-
   // Platform columns: top 3 per platform by heat score
   const platformTrends = useMemo(() => {
     const byPlatform = (p: string) =>
