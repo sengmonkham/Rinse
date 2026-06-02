@@ -91,6 +91,7 @@ export default function App() {
   });
 
   const [scanHistory, setScanHistory] = useState<any[]>([]);
+  const [aiHidden, setAiHidden] = useState(false);
 
   // Detect mode & initialize
   useEffect(() => {
@@ -130,6 +131,13 @@ export default function App() {
               console.log("No content script listener found. (Needs manual scan trigger)");
             } else if (response && response.status === "success") {
               setScanResults(response.data);
+            }
+          });
+
+          // Request hidden status from active content script
+          chrome.tabs.sendMessage(tab.id!, { action: "getHideAIStatus" }, (response: any) => {
+            if (!chrome.runtime.lastError && response && response.status === "success") {
+              setAiHidden(response.isHidden);
             }
           });
         }
@@ -253,6 +261,26 @@ export default function App() {
         alert("Please load Aegis as an unpacked Chrome Extension to run deep visual scans on web tabs.");
       }, 500);
     }
+  };
+
+  // Toggle hiding AI generated content
+  const handleToggleHideAI = () => {
+    if (isStandalone) {
+      alert("Please load Aegis as an unpacked Chrome Extension to toggle content visibility.");
+      setAiHidden(!aiHidden);
+      return;
+    }
+    const nextHidden = !aiHidden;
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs: any[]) => {
+      const tab = tabs[0];
+      if (tab && tab.id) {
+        chrome.tabs.sendMessage(tab.id, { action: "toggleHideAI", hide: nextHidden }, (response: any) => {
+          if (response && response.status === "success") {
+            setAiHidden(response.isHidden);
+          }
+        });
+      }
+    });
   };
 
   // Clear history items
@@ -384,6 +412,8 @@ export default function App() {
             onScanQuick={triggerScan} 
             onScanDeep={triggerDeepScan}
             disabled={currentUrl === "Chrome Internal Page"}
+            aiHidden={aiHidden}
+            onToggleHideAI={handleToggleHideAI}
           />
         )}
         {activeTab === 'inspector' && (

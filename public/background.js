@@ -105,5 +105,68 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Keep message channel open for async response
   }
   
+  else if (request.action === "fetchImageMetadata") {
+    const imgUrl = request.url;
+    fetch(imgUrl, {
+      headers: { 'Range': 'bytes=0-65535' }
+    })
+    .then(async response => {
+      if (!response.ok) {
+        throw new Error("HTTP error " + response.status);
+      }
+      const buffer = await response.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      
+      let text = "";
+      for (let i = 0; i < bytes.length; i++) {
+        if (bytes[i] >= 32 && bytes[i] <= 126) {
+          text += String.fromCharCode(bytes[i]);
+        } else {
+          text += " ";
+        }
+      }
+      
+      const aiTags = [
+        { term: "Stable Diffusion", source: "Stable Diffusion metadata signature" },
+        { term: "Midjourney", source: "Midjourney metadata signature" },
+        { term: "DALL-E", source: "DALL-E metadata signature" },
+        { term: "NovelAI", source: "NovelAI metadata signature" },
+        { term: "civitai", source: "CivitAI tag in metadata" },
+        { term: "Adobe Firefly", source: "Adobe Firefly creator tag" }
+      ];
+
+      for (const tag of aiTags) {
+        if (text.includes(tag.term)) {
+          sendResponse({
+            status: "success",
+            found: true,
+            score: 99,
+            reasons: [`Detected '${tag.term}' tag: ${tag.source}`],
+            url: imgUrl
+          });
+          return;
+        }
+      }
+
+      if (text.includes("tEXtparameters") || text.includes("zTXtparameters") || text.includes("iTXtparameters") || text.includes("tEXt parameters") || text.includes("zTXt parameters")) {
+        sendResponse({
+          status: "success",
+          found: true,
+          score: 95,
+          reasons: ["PNG metadata contains generation 'parameters' chunk (Stable Diffusion parameter data)"],
+          url: imgUrl
+        });
+        return;
+      }
+      
+      sendResponse({ status: "success", found: false });
+    })
+    .catch(err => {
+      sendResponse({ status: "success", found: false, error: err.message });
+    });
+    return true; // Keep message channel open for async response
+  }
+  
   return true; // Keep channel open
 });
+

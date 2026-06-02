@@ -1,4 +1,4 @@
-import { Scan, Eye, FileText, Image as ImageIcon, Video, HelpCircle, AlertTriangle } from 'lucide-react';
+import { Scan, Eye, EyeOff, FileText, Image as ImageIcon, Video, HelpCircle, AlertTriangle } from 'lucide-react';
 import type { ScanResults } from '../App';
 
 interface DashboardProps {
@@ -7,9 +7,11 @@ interface DashboardProps {
   onScanQuick: () => void;
   onScanDeep: () => void;
   disabled: boolean;
+  aiHidden: boolean;
+  onToggleHideAI: () => void;
 }
 
-export default function DetectorDashboard({ scanResults, scanning, onScanQuick, onScanDeep, disabled }: DashboardProps) {
+export default function DetectorDashboard({ scanResults, scanning, onScanQuick, onScanDeep, disabled, aiHidden, onToggleHideAI }: DashboardProps) {
   const { score, text, images, videos } = scanResults;
 
   // Calculate stroke parameters for progress circle (Radius = 50, Circumference = 314.16)
@@ -170,6 +172,27 @@ export default function DetectorDashboard({ scanResults, scanning, onScanQuick, 
             <span>Re-Scan Page</span>
           </button>
         </div>
+
+        <button
+          onClick={onToggleHideAI}
+          disabled={disabled}
+          className={`btn ${aiHidden ? 'btn-primary' : 'btn-secondary'}`}
+          style={{ 
+            width: '100%', 
+            padding: '10px', 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center', 
+            gap: '8px',
+            background: aiHidden ? '#EF4444' : '',
+            borderColor: aiHidden ? '#EF4444' : ''
+          }}
+        >
+          <EyeOff size={14} style={{ color: aiHidden ? 'white' : 'var(--text-secondary)' }} />
+          <span style={{ color: aiHidden ? 'white' : 'var(--text-primary)', fontWeight: '700', fontSize: '12px' }}>
+            {aiHidden ? 'Show Hidden AI Content' : 'Hide AI Generated Content'}
+          </span>
+        </button>
 
         {disabled && (
           <p style={{ fontSize: '10px', color: 'var(--danger)', textAlign: 'center', marginTop: '4px' }}>

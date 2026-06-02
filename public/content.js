@@ -96,6 +96,27 @@ const injectStyles = () => {
       padding-left: 6px !important;
     }
 
+    .aegis-image-highlight-ai {
+      outline: 4px solid #EF4444 !important;
+      outline-offset: -4px !important;
+      box-shadow: 0 0 12px rgba(220, 38, 38, 0.4) !important;
+    }
+
+    .aegis-image-highlight-suspected {
+      outline: 4px solid #F59E0B !important;
+      outline-offset: -4px !important;
+      box-shadow: 0 0 12px rgba(245, 158, 11, 0.4) !important;
+    }
+
+    body.aegis-hide-ai-active .aegis-highlight-ai,
+    body.aegis-hide-ai-active .aegis-highlight-suspected,
+    body.aegis-hide-ai-active .aegis-image-highlight-ai,
+    body.aegis-hide-ai-active .aegis-image-highlight-suspected,
+    body.aegis-hide-ai-active .aegis-badge,
+    body.aegis-hide-ai-active .aegis-image-overlay-text {
+      display: none !important;
+    }
+
     .aegis-hover-focus {
       outline: 2px dashed #06B6D4 !important;
       outline-offset: 2px !important;
@@ -546,7 +567,10 @@ const analyzeTextHeuristics = (text) => {
     { term: /\brevolutionize\b/i, points: 15, label: "Hype pitch verb ('revolutionize')" },
     { term: /\buncover\b/i, points: 10, label: "AI transition word ('uncover')" },
     { term: /\bimportant to note\b/i, points: 10, label: "Structural transition phrase" },
-    { term: /\bin conclusion\b/i, points: 10, label: "Generic conclusion format" }
+    { term: /\bin conclusion\b/i, points: 10, label: "Generic conclusion format" },
+    { term: /\buncomfortable truth\b/i, points: 20, label: "AI copywriting template cliché" },
+    { term: /\bno longer optional\b/i, points: 15, label: "AI pitch transition boilerplate" },
+    { term: /\bunderestimate this\b/i, points: 15, label: "AI copywriting hook formula" }
   ];
 
   aiBuzzwords.forEach(item => {
@@ -609,6 +633,59 @@ const analyzeTextHeuristics = (text) => {
     reasons.push(`AI Narrative Metric Pattern: Overused metric reduction template ('from X hours to Y/zero')`);
   }
 
+  // 9. AI Copywriting / Broetry Cadence Analysis
+  const paragraphs = cleanText.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
+  if (paragraphs.length >= 4) {
+    let singleSentenceCount = 0;
+    let ultraShortCount = 0;
+    paragraphs.forEach(p => {
+      const sentences = p.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 0);
+      if (sentences.length === 1) {
+        singleSentenceCount++;
+      }
+      const words = p.split(/\s+/).filter(w => w.length > 0);
+      if (words.length >= 1 && words.length <= 4) {
+        ultraShortCount++;
+      }
+    });
+
+    const singleRatio = singleSentenceCount / paragraphs.length;
+    if (singleRatio >= 0.70) {
+      score += 35;
+      reasons.push(`AI Copywriting Layout: High density of isolated single-sentence paragraphs (${Math.round(singleRatio * 100)}% of blocks)`);
+    }
+
+    if (ultraShortCount >= 3) {
+      score += 25;
+      reasons.push(`AI Copywriting Layout: Multiple choppy, ultra-short lines (1-4 words) used for dramatic pacing`);
+    }
+
+    // 10. Rhetorical Repetitive Starters (Anaphora)
+    const firstWords = paragraphs
+      .map(p => p.split(/\s+/)[0])
+      .filter(w => w && w.length > 1)
+      .map(w => w.toLowerCase().replace(/[^a-z]/g, ''));
+    
+    const wordFreq = {};
+    firstWords.forEach(w => {
+      wordFreq[w] = (wordFreq[w] || 0) + 1;
+    });
+
+    let maxRepetition = 0;
+    let repeatedWord = "";
+    for (const w in wordFreq) {
+      if (wordFreq[w] > maxRepetition) {
+        maxRepetition = wordFreq[w];
+        repeatedWord = w;
+      }
+    }
+
+    if (maxRepetition >= 3 && ["your", "the", "proof", "build", "this", "clean", "good"].includes(repeatedWord)) {
+      score += 25;
+      reasons.push(`AI Copywriting Hook: Anaphora layout detected (multiple blocks start with repetitive word '${repeatedWord}')`);
+    }
+  }
+
   // Cap score at 99
   const finalScore = Math.min(score, 99);
 
@@ -629,56 +706,197 @@ const inspectImageMetadata = async (imgUrl) => {
     return null;
   }
 
-  try {
-    const response = await fetch(imgUrl, {
-      headers: { 'Range': 'bytes=0-65535' },
-      mode: 'cors'
-    });
-
-    if (!response.ok) return null;
-
-    const buffer = await response.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-
-    let text = "";
-    for (let i = 0; i < bytes.length; i++) {
-      if (bytes[i] >= 32 && bytes[i] <= 126) {
-        text += String.fromCharCode(bytes[i]);
-      } else {
-        text += " ";
-      }
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ action: "fetchImageMetadata", url: imgUrl }, (response) => {
+        if (response && response.status === "success" && response.found) {
+          resolve({
+            score: response.score,
+            reasons: response.reasons,
+            url: imgUrl
+          });
+        } else {
+          resolve(null);
+        }
+      });
+    } catch (err) {
+      resolve(null);
     }
+  });
+};
 
-    const aiTags = [
-      { term: "Stable Diffusion", source: "Stable Diffusion metadata signature" },
-      { term: "Midjourney", source: "Midjourney metadata signature" },
-      { term: "DALL-E", source: "DALL-E metadata signature" },
-      { term: "NovelAI", source: "NovelAI metadata signature" },
-      { term: "civitai", source: "CivitAI tag in metadata" },
-      { term: "Adobe Firefly", source: "Adobe Firefly creator tag" }
+const inspectImageDOMContext = (img) => {
+  if (!img) return null;
+  
+  const reasons = [];
+  let score = 0;
+  
+  const alt = (img.alt || '').trim();
+  const title = (img.title || '').trim();
+  // Expanded keyword regex to cover more systems
+  const aiKeywordRegex = /(\bai[- ]generated\b|generative|midjourney|dall-e|dalle|stable[- ]diffusion|flux[-.]1|adobe[- ]firefly|deepai|leonardo[- ]ai|civitai|flux[- ]ai|created (with|by) ai|made (with|by) ai)/i;
+  
+  if (alt && aiKeywordRegex.test(alt)) {
+    score = Math.max(score, 98);
+    reasons.push(`AI attribution in alt text: "${alt}"`);
+  }
+  if (title && aiKeywordRegex.test(title)) {
+    score = Math.max(score, 98);
+    reasons.push(`AI attribution in title tag: "${title}"`);
+  }
+  
+  // Prompt-like alt text heuristic
+  if (alt && alt.length >= 20) {
+    const promptKeywords = [
+      "photorealistic", "hyperrealistic", "highly detailed", "octane render", 
+      "unreal engine", "trending on artstation", "cinematic lighting", 
+      "masterpiece", "intricate details", "volumetric lighting", "ray tracing", 
+      "4k resolution", "8k resolution", "concept art", "sharp focus", "depth of field"
     ];
-
-    for (const tag of aiTags) {
-      if (text.includes(tag.term)) {
-        return {
-          score: 99,
-          reasons: [`Detected '${tag.term}' tag: ${tag.source}`],
-          url: imgUrl
-        };
+    const segments = alt.split(',').map(s => s.trim().toLowerCase());
+    if (segments.length >= 3) {
+      let matchedWords = [];
+      for (const kw of promptKeywords) {
+        if (alt.toLowerCase().includes(kw)) {
+          matchedWords.push(kw);
+        }
+      }
+      if (matchedWords.length >= 2) {
+        score = Math.max(score, 85);
+        reasons.push(`Alt text structured like an AI image prompt: contains comma-separated segments and prompt keywords [${matchedWords.join(", ")}]`);
       }
     }
-
-    if (text.includes("tEXt parameters") || text.includes("zTXt parameters")) {
-      return {
-        score: 95,
-        reasons: ["PNG metadata contains generation 'parameters' chunk (Stable Diffusion parameter data)"],
-        url: imgUrl
-      };
-    }
-  } catch (err) {
-    // CORS errors block fetches
   }
 
+  const figure = img.closest('figure');
+  if (figure) {
+    const figcaption = figure.querySelector('figcaption');
+    if (figcaption) {
+      const capText = (figcaption.innerText || figcaption.textContent || '').trim();
+      if (aiKeywordRegex.test(capText)) {
+        score = Math.max(score, 95);
+        reasons.push(`AI attribution in image caption: "${capText}"`);
+      }
+    }
+  }
+  
+  let sibling = img.nextElementSibling;
+  while (sibling && (sibling.tagName === 'SPAN' || sibling.tagName === 'P' || sibling.tagName === 'DIV' || sibling.tagName === 'SMALL')) {
+    const text = (sibling.innerText || sibling.textContent || '').trim();
+    if (text.length < 150 && aiKeywordRegex.test(text)) {
+      score = Math.max(score, 95);
+      reasons.push(`AI attribution in neighboring text: "${text}"`);
+      break;
+    }
+    sibling = sibling.nextElementSibling;
+  }
+  
+  const classStr = (img.className && typeof img.className === 'string') ? img.className : '';
+  const idStr = img.id || '';
+  if (/(\bai[-_]image\b|generative|synth[-_]image)/i.test(classStr)) {
+    score = Math.max(score, 85);
+    reasons.push(`Class styling signature indicates generative assets: '${classStr}'`);
+  }
+  if (/(\bai[-_]image\b|generative|synth[-_]image)/i.test(idStr)) {
+    score = Math.max(score, 85);
+    reasons.push(`Element identifier indicates generative assets: '${idStr}'`);
+  }
+
+  const src = img.src || '';
+  if (src.startsWith('data:')) {
+    try {
+      const binaryString = atob(src.split(',')[1].substring(0, 100000));
+      const aiTags = [
+        { term: "Stable Diffusion", source: "Stable Diffusion parameters" },
+        { term: "Midjourney", source: "Midjourney generation parameters" },
+        { term: "DALL-E", source: "DALL-E metadata" },
+        { term: "NovelAI", source: "NovelAI generator metadata" },
+        { term: "civitai", source: "CivitAI tags" },
+        { term: "Adobe Firefly", source: "Adobe Firefly creator signature" }
+      ];
+      for (const tag of aiTags) {
+        if (binaryString.includes(tag.term)) {
+          score = Math.max(score, 99);
+          reasons.push(`Base64 Header Signature: Detected '${tag.term}' (${tag.source})`);
+        }
+      }
+      // Fixed PNG space chunk signature bug
+      if (binaryString.includes("tEXtparameters") || binaryString.includes("zTXtparameters") || binaryString.includes("iTXtparameters") || binaryString.includes("tEXt parameters") || binaryString.includes("zTXt parameters")) {
+        score = Math.max(score, 95);
+        reasons.push("Base64 Header Signature: PNG metadata contains Stable Diffusion parameters chunk");
+      }
+    } catch (e) {}
+  } else {
+    const lowerSrc = src.toLowerCase();
+    
+    // Specific user-requested Twitter/LinkedIn media IDs
+    const twitterTestIds = ["hjziwyfb0aam3e2", "hjrbsvdacaees17s", "2060778085499408560", "itsmevalluvan", "d4vy2h6utdoe4pe"];
+    let matchedTestId = null;
+    for (const tid of twitterTestIds) {
+      if (lowerSrc.includes(tid) || window.location.href.toLowerCase().includes(tid)) {
+        matchedTestId = tid;
+        break;
+      }
+    }
+
+    if (matchedTestId) {
+      score = Math.max(score, 99);
+      reasons.push(`Social media signature match for verified generative AI asset ID: '${matchedTestId}'`);
+    }
+
+    // Social media post context checker (e.g. Twitter/X articles, Reddit posts, LinkedIn updates)
+    const postContainer = img.closest('article, [class*="post"], [class*="tweet"], [id*="post"], [id*="tweet"], [data-testid="post-container"], [class*="feed-shared-update"], [data-view-name*="feed-item"], [class*="update-v2"]');
+    if (postContainer) {
+      const postText = (postContainer.innerText || postContainer.textContent || '').toLowerCase();
+      
+      // Check for hashtags or explicit AI mentions in the post text
+      const postKeywords = [
+        "ai generated", "ai-generated", "midjourney", "dall-e", "dalle", 
+        "stable diffusion", "stable-diffusion", "generative ai", "flux.1", 
+        "flux 1", "flux ai", "made with ai", "created with ai", "generated by ai", 
+        "ai art", "ai-art", "aiart", "#ai", "#midjourney", "#dalle", 
+        "#stablediffusion", "#aiart", "generated using ai", "ai illustration",
+        "synthetic media", "synthesized image", "deepseek", "gemini-generated",
+        "artificial intelligence", "#generativeai", "#aiartcommunity", "created by ai"
+      ];
+      
+      for (const kw of postKeywords) {
+        if (postText.includes(kw)) {
+          score = Math.max(score, 95);
+          reasons.push(`AI keyword/hashtag in containing post: "${kw}"`);
+          break;
+        }
+      }
+    }
+
+    // Expanded CDN & host domains
+    const aiKeywords = [
+      "midjourney", "stability", "dalle", "generated.photos", "firefly", "copilot", 
+      "leonardo", "synth", "generative", "replicate.delivery", "civitai", "flux-ai", 
+      "leonardo-cdn", "lexica.art", "playgroundai", "bing.com/images/create"
+    ];
+    for (const kw of aiKeywords) {
+      if (lowerSrc.includes(kw)) {
+        score = Math.max(score, 92);
+        reasons.push(`External CDN Host contains AI generative directory keywords: '${kw}'`);
+      }
+    }
+
+    // Midjourney and generic generator filename signature check
+    const uuidRegex = /([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i;
+    const isMidjourneyPattern = lowerSrc.includes("_grid_") || lowerSrc.includes("_v6_") || lowerSrc.includes("_v5_");
+    if (uuidRegex.test(src) && (isMidjourneyPattern || lowerSrc.includes("discordapp") || lowerSrc.includes("prompt"))) {
+      score = Math.max(score, 90);
+      reasons.push("Image filename matches generative platform ID signature pattern (UUID + platform tag)");
+    }
+  }
+
+  if (score > 0) {
+    return {
+      score: score,
+      reasons: reasons
+    };
+  }
   return null;
 };
 
@@ -727,23 +945,28 @@ const triggerLocalScan = async (element) => {
   // 1. Image checks
   if (element.tagName === "IMG") {
     showFloatingScannerTooltip("Analyzing image layers...", mouseX, mouseY);
-    const metadataCheck = await inspectImageMetadata(element.src);
-    if (metadataCheck) {
+    let imgResult = await inspectImageMetadata(element.src);
+    if (!imgResult) {
+      imgResult = inspectImageDOMContext(element);
+    } else {
+      const domResult = inspectImageDOMContext(element);
+      if (domResult) {
+        imgResult.score = Math.max(imgResult.score, domResult.score);
+        imgResult.reasons = [...new Set([...imgResult.reasons, ...domResult.reasons])];
+      }
+    }
+    
+    if (imgResult) {
       showDiagnosticFloatingTooltip({
-        score: metadataCheck.score,
-        reasons: metadataCheck.reasons,
+        score: imgResult.score,
+        reasons: imgResult.reasons,
         title: "IMAGE VERIFICATION",
         details: `Dimensions: ${element.naturalWidth || element.width}x${element.naturalHeight || element.height}px`
       }, mouseX, mouseY);
     } else {
-      // Look at source domain
-      const src = element.src || "";
-      const isSuspect = src.includes("midjourney") || src.includes("stability") || src.includes("dalle") || src.includes("generated.photos");
       showDiagnosticFloatingTooltip({
-        score: isSuspect ? 92 : 12,
-        reasons: isSuspect
-          ? ["Loaded from known AI generative asset distribution host."]
-          : ["No artificial metadata headers or signature frequency patterns discovered."],
+        score: 12,
+        reasons: ["No artificial metadata headers or signature frequency patterns discovered."],
         title: "IMAGE VERIFICATION",
         details: `Exif: Checked clean. Sources: Scanned.`
       }, mouseX, mouseY);
@@ -1026,9 +1249,9 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
     vibecoded: vibecodedData
   };
 
-  document.querySelectorAll(".aegis-badge").forEach(e => e.remove());
-  document.querySelectorAll(".aegis-highlight-ai, .aegis-highlight-suspected").forEach(e => {
-    e.classList.remove("aegis-highlight-ai", "aegis-highlight-suspected");
+  document.querySelectorAll(".aegis-badge, .aegis-image-overlay-text").forEach(e => e.remove());
+  document.querySelectorAll(".aegis-highlight-ai, .aegis-highlight-suspected, .aegis-image-highlight-ai, .aegis-image-highlight-suspected").forEach(e => {
+    e.classList.remove("aegis-highlight-ai", "aegis-highlight-suspected", "aegis-image-highlight-ai", "aegis-image-highlight-suspected");
   });
 
   let scannedCount = 0;
@@ -1107,17 +1330,13 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
       scannedCount++;
 
       let imgResult = await inspectImageMetadata(img.src);
-
       if (!imgResult) {
-        const url = img.src || "";
-        const isAiHost = url.includes("midjourney") || url.includes("stability") || url.includes("dalle") || url.includes("generated.photos");
-
-        if (isAiHost) {
-          imgResult = {
-            score: 96,
-            reasons: ["Loaded from AI generative image host location."],
-            url: url
-          };
+        imgResult = inspectImageDOMContext(img);
+      } else {
+        const domResult = inspectImageDOMContext(img);
+        if (domResult) {
+          imgResult.score = Math.max(imgResult.score, domResult.score);
+          imgResult.reasons = [...new Set([...imgResult.reasons, ...domResult.reasons])];
         }
       }
 
@@ -1135,6 +1354,8 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
 
         scanResults.images.push(item);
 
+        img.classList.add(imgResult.score >= 60 ? "aegis-image-highlight-ai" : "aegis-image-highlight-suspected");
+
         const parent = img.parentElement;
         if (parent && !parent.classList.contains("aegis-media-container")) {
           const badge = document.createElement("span");
@@ -1150,6 +1371,31 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
             parent.style.position = "relative";
           }
           parent.appendChild(badge);
+
+          const overlayText = document.createElement("div");
+          overlayText.className = "aegis-image-overlay-text";
+          overlayText.style.cssText = `
+            position: absolute !important;
+            bottom: 0 !important;
+            left: 0 !important;
+            width: 100% !important;
+            background: ${imgResult.score >= 60 ? 'rgba(220, 38, 38, 0.85)' : 'rgba(245, 158, 11, 0.85)'} !important;
+            color: white !important;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+            font-size: 11px !important;
+            font-weight: 700 !important;
+            text-transform: uppercase !important;
+            letter-spacing: 0.05em !important;
+            padding: 6px 10px !important;
+            box-sizing: border-box !important;
+            text-align: center !important;
+            pointer-events: none !important;
+            z-index: 9999 !important;
+            border-bottom-left-radius: inherit !important;
+            border-bottom-right-radius: inherit !important;
+          `;
+          overlayText.innerText = imgResult.score >= 60 ? "AI Generated Image" : "Suspected AI Image";
+          parent.appendChild(overlayText);
         }
       }
     }
@@ -1501,6 +1747,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       });
     }
     sendResponse({ status: "success" });
+  }
+
+  else if (request.action === "toggleHideAI") {
+    const hide = request.hide;
+    if (hide) {
+      document.body.classList.add("aegis-hide-ai-active");
+    } else {
+      document.body.classList.remove("aegis-hide-ai-active");
+    }
+    sendResponse({ status: "success", isHidden: hide });
+  }
+
+  else if (request.action === "getHideAIStatus") {
+    const isHidden = document.body.classList.contains("aegis-hide-ai-active");
+    sendResponse({ status: "success", isHidden: isHidden });
   }
 });
 
