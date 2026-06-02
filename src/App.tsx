@@ -1,290 +1,415 @@
-import { useState } from 'react';
-import { useTrendSimulator } from './hooks/useTrendSimulator';
-import { DashboardView } from './components/DashboardView';
-import { DirectoryView } from './components/DirectoryView';
-import { BotManagerView } from './components/BotManagerView';
-import { ReportsView } from './components/ReportsView';
-import { LeadRadarView } from './components/LeadRadarView';
-import { AlertNotification } from './components/AlertNotification';
-import type { Trend, ViewType } from './types';
+import { useState, useEffect } from 'react';
 import { 
-  LayoutDashboard, 
-  Compass, 
-  Cpu, 
+  Shield, 
   FileText, 
-  Sparkles,
-  Terminal,
-  RefreshCw,
-  Target,
-  Bell
+  Settings as SettingsIcon, 
+  History as HistoryIcon, 
+  Sparkles, 
+  Globe,
+  RefreshCw
 } from 'lucide-react';
+import DetectorDashboard from './components/DetectorDashboard';
+import ContentList from './components/ContentList';
+import Playground from './components/Playground';
+import PageHistory from './components/PageHistory';
+import Settings from './components/Settings';
 
-function App() {
-  const [activeTab, setActiveTab] = useState<ViewType>('dashboard');
-  const [selectedDetailedTrend, setSelectedDetailedTrend] = useState<Trend | null>(null);
+declare const chrome: any;
 
-  const {
-    trends,
-    bots,
-    logs,
-    alerts,
-    leads,
-    businessProfile,
-    clearLogs,
-    toggleBot,
-    addTrackerToBot,
-    removeTrackerFromBot,
-    addWatchedAccount,
-    dismissAlert,
-    updateLeadStatus,
-    updateBusinessProfile,
-  } = useTrendSimulator();
+export interface ScanStats {
+  textCount: number;
+  imageCount: number;
+  videoCount: number;
+}
 
-  const activeBots = bots.filter(b => b.status !== 'idle').length;
-  const hotLeadCount = leads.filter(l => l.isHot && l.status !== 'dismissed').length;
-  const activeAlertCount = alerts.filter(a => !a.dismissed).length;
+export interface ScanItem {
+  id: string;
+  score: number;
+  reasons: string[];
+  snippet?: string;
+  tagName?: string;
+  src?: string;
+  width?: number;
+  height?: number;
+}
 
-  const handleViewTrendFromAlert = (trendId: string) => {
-    const trend = trends.find(t => t.id === trendId);
-    if (trend) {
-      setSelectedDetailedTrend(trend);
-      setActiveTab('directory');
+export interface ScanResults {
+  text: ScanItem[];
+  images: ScanItem[];
+  videos: ScanItem[];
+  score: number;
+  scannedAt: number | null;
+  vibecoded?: {
+    isVibecoded: boolean;
+    reasons: string[];
+    hasPurpleGradient: boolean;
+    hasBubbleHeader: boolean;
+  };
+}
+
+export interface AppSettings {
+  enableTextScan: boolean;
+  enableImageScan: boolean;
+  enableVideoScan: boolean;
+  sensitivity: number;
+  showInlineBadges: boolean;
+  apiMode: string;
+  apiUrl: string;
+  apiKey: string;
+}
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'inspector' | 'playground' | 'history' | 'settings'>('dashboard');
+  const [isStandalone, setIsStandalone] = useState(true);
+  const [currentUrl, setCurrentUrl] = useState("Local Dashboard Preview");
+  const [currentTitle, setCurrentTitle] = useState("Standalone Simulator");
+  const [scanning, setScanning] = useState(false);
+  
+  const [scanResults, setScanResults] = useState<ScanResults>({
+    text: [],
+    images: [],
+    videos: [],
+    score: 100,
+    scannedAt: null,
+    vibecoded: {
+      isVibecoded: false,
+      reasons: [],
+      hasPurpleGradient: false,
+      hasBubbleHeader: false
+    }
+  });
+
+  const [settings, setSettings] = useState<AppSettings>({
+    enableTextScan: true,
+    enableImageScan: true,
+    enableVideoScan: true,
+    sensitivity: 50,
+    showInlineBadges: true,
+    apiMode: "local",
+    apiUrl: "",
+    apiKey: ""
+  });
+
+  const [scanHistory, setScanHistory] = useState<any[]>([]);
+
+  // Detect mode & initialize
+  useEffect(() => {
+    const isChromeExt = typeof window !== "undefined" && typeof (window as any).chrome !== "undefined" && typeof chrome.runtime !== "undefined" && typeof chrome.runtime.id !== "undefined";
+    setIsStandalone(!isChromeExt);
+    
+    if (isChromeExt) {
+      // 1. Get current active tab info
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs: any[]) => {
+        const tab = tabs[0];
+        if (tab && tab.url) {
+          // Ignore chrome:// internal pages
+          if (tab.url.startsWith("chrome://") || tab.url.startsWith("chrome-extension://")) {
+            setCurrentUrl("Chrome Internal Page");
+            setCurrentTitle("Scanning disabled on System Pages");
+            setScanResults({
+              text: [],
+              images: [],
+              videos: [],
+              score: 100,
+              scannedAt: Date.now(),
+              vibecoded: {
+                isVibecoded: false,
+                reasons: [],
+                hasPurpleGradient: false,
+                hasBubbleHeader: false
+              }
+            });
+            return;
+          }
+          setCurrentUrl(tab.url);
+          setCurrentTitle(tab.title || new URL(tab.url).hostname);
+          
+          // Request status from active content script
+          chrome.tabs.sendMessage(tab.id!, { action: "getPageStatus" }, (response: any) => {
+            if (chrome.runtime.lastError) {
+              console.log("No content script listener found. (Needs manual scan trigger)");
+            } else if (response && response.status === "success") {
+              setScanResults(response.data);
+            }
+          });
+        }
+      });
+
+      // 2. Load settings and history from extension local storage
+      chrome.storage.local.get(["settings", "scanHistory"], (result: any) => {
+        if (result.settings) setSettings(result.settings);
+        if (result.scanHistory) setScanHistory(result.scanHistory);
+      });
+    } else {
+      // Standalone mode: Load settings and history from localStorage
+      const savedSettings = localStorage.getItem("aegis_settings");
+      if (savedSettings) {
+        setSettings(JSON.parse(savedSettings));
+      }
+      
+      const savedHistory = localStorage.getItem("aegis_history");
+      if (savedHistory) {
+        setScanHistory(JSON.parse(savedHistory));
+      }
+      
+      setScanResults({
+        text: [],
+        images: [],
+        videos: [],
+        score: 100,
+        scannedAt: Date.now(),
+        vibecoded: {
+          isVibecoded: false,
+          reasons: [],
+          hasPurpleGradient: false,
+          hasBubbleHeader: false
+        }
+      });
+    }
+  }, []);
+
+  // Update Settings
+  const handleSaveSettings = (newSettings: AppSettings) => {
+    setSettings(newSettings);
+    if (!isStandalone) {
+      chrome.storage.local.set({ settings: newSettings });
+      // Notify active tab content script of changed HUD settings
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs: any[]) => {
+        const tab = tabs[0];
+        if (tab && tab.id) {
+          chrome.tabs.sendMessage(tab.id, { action: "toggleHUD", enabled: newSettings.showInlineBadges });
+        }
+      });
+    } else {
+      localStorage.setItem("aegis_settings", JSON.stringify(newSettings));
     }
   };
 
-  const getHeaderTitle = () => {
-    switch (activeTab) {
-      case 'dashboard': return 'Dashboard';
-      case 'directory': return 'Trend Directory';
-      case 'bots': return 'Scraper Bots';
-      case 'reports': return 'Reports & Alerts';
-      case 'leads': return '🎯 Lead Radar';
-      default: return '';
+  // Trigger quick page scan
+  const triggerScan = () => {
+    if (scanning) return;
+    setScanning(true);
+    
+    if (!isStandalone) {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs: any[]) => {
+        const tab = tabs[0];
+        if (tab && tab.id) {
+          chrome.tabs.sendMessage(tab.id, { 
+            action: "runScan", 
+            options: {
+              text: settings.enableTextScan,
+              images: settings.enableImageScan,
+              videos: settings.enableVideoScan
+            } 
+          }, (response: any) => {
+            setScanning(false);
+            if (response && response.status === "success") {
+              setScanResults(response.data);
+              // Refresh history
+              chrome.storage.local.get(["scanHistory"], (result: any) => {
+                if (result.scanHistory) setScanHistory(result.scanHistory);
+              });
+            } else {
+              alert("Could not communicate with the page. Try refreshing the webpage.");
+            }
+          });
+        }
+      });
+    } else {
+      setTimeout(() => {
+        setScanning(false);
+        alert("Please load Aegis as an unpacked Chrome Extension to scan active webpages. For quick tests, use the 'Sandbox' tab!");
+      }, 500);
     }
   };
 
-  const getHeaderDescription = () => {
-    switch (activeTab) {
-      case 'dashboard': return 'Real-time aggregated social intelligence — hot trends, emerging signals, and platform-specific feeds.';
-      case 'directory': return 'Browse active trends filtered by platform origin, type, and heat score. Click any card for full intel.';
-      case 'bots': return 'Configure virtual micro-scrapers, account watchlists, and active crawler intent modes.';
-      case 'reports': return 'Compile intelligence briefs and track high-velocity spike events across all platforms.';
-      case 'leads': return 'Buyer intent detection — identify potential customers with purchasing power profiling and tier-adapted outreach.';
-      default: return '';
+  // Trigger visual deep scan laser animation
+  const triggerDeepScan = () => {
+    if (scanning) return;
+    setScanning(true);
+
+    if (!isStandalone) {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs: any[]) => {
+        const tab = tabs[0];
+        if (tab && tab.id) {
+          // Close popup window so they see scan? 
+          // Better to just let it run. In Chrome, keeping popup open works, or we can send message.
+          chrome.tabs.sendMessage(tab.id, { action: "runDeepScan" }, (response: any) => {
+            setScanning(false);
+            if (response && response.status === "success") {
+              setScanResults(response.data);
+              chrome.storage.local.get(["scanHistory"], (result: any) => {
+                if (result.scanHistory) setScanHistory(result.scanHistory);
+              });
+            } else {
+              alert("Error executing scan. Make sure the page is fully loaded.");
+            }
+          });
+        }
+      });
+    } else {
+      setTimeout(() => {
+        setScanning(false);
+        alert("Please load Aegis as an unpacked Chrome Extension to run deep visual scans on web tabs.");
+      }, 500);
     }
   };
 
-  const renderActiveView = () => {
-    switch (activeTab) {
-      case 'dashboard':
-        return (
-          <DashboardView 
-            trends={trends} 
-            bots={bots} 
-            logs={logs}
-            alerts={alerts}
-            hotLeadCount={hotLeadCount}
-            onClearLogs={clearLogs}
-            onViewTrendDetails={(trend) => {
-              setSelectedDetailedTrend(trend);
-              setActiveTab('directory');
-            }}
-            onGoToLeads={() => setActiveTab('leads')}
-          />
-        );
-      case 'directory':
-        return (
-          <DirectoryView 
-            trends={trends} 
-            activeTrend={selectedDetailedTrend}
-            setActiveTrend={setSelectedDetailedTrend}
-          />
-        );
-      case 'bots':
-        return (
-          <BotManagerView 
-            bots={bots} 
-            onToggleBot={toggleBot} 
-            onAddTracker={addTrackerToBot} 
-            onRemoveTracker={removeTrackerFromBot}
-            onAddWatchedAccount={addWatchedAccount}
-          />
-        );
-      case 'reports':
-        return (
-          <ReportsView 
-            trends={trends} 
-            logs={logs}
-          />
-        );
-      case 'leads':
-        return (
-          <LeadRadarView
-            leads={leads}
-            businessProfile={businessProfile}
-            onUpdateStatus={updateLeadStatus}
-            onUpdateBusinessProfile={updateBusinessProfile}
-          />
-        );
-      default:
-        return null;
+  // Clear history items
+  const handleClearHistory = () => {
+    if (!isStandalone) {
+      chrome.storage.local.set({ scanHistory: [] }, () => {
+        setScanHistory([]);
+      });
+    } else {
+      setScanHistory([]);
+      localStorage.removeItem("aegis_history");
     }
   };
 
   return (
-    <div className="app-container">
-      
-      {/* Alert Notification Stack */}
-      <AlertNotification
-        alerts={alerts}
-        onDismiss={dismissAlert}
-        onViewTrend={handleViewTrendFromAlert}
-        onViewLead={() => setActiveTab('leads')}
-      />
-
-      {/* Sidebar Navigation */}
-      <aside className="sidebar">
-        <div className="sidebar-logo">
-          <Sparkles size={22} style={{ fill: 'var(--primary-bright)', stroke: 'none' }} />
-          <span>TrendScanner</span>
+    <div className={`app-container glass ${isStandalone ? 'standalone-layout' : 'popup-mode'}`}>
+      {/* Header */}
+      <header className="app-header">
+        <div className="logo-container">
+          <div className="logo-icon">
+            <Shield size={18} color="#070a13" style={{ fill: "#070a13" }} />
+          </div>
+          <div>
+            <h1 className="logo-text">AEGIS AI</h1>
+            <p style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Content Verifier</p>
+          </div>
         </div>
-
-        <nav>
-          <ul className="sidebar-menu">
-            <li 
-              className={`sidebar-item ${activeTab === 'dashboard' ? 'active' : ''}`}
-              onClick={() => setActiveTab('dashboard')}
-            >
-              <LayoutDashboard size={18} />
-              <span>Dashboard</span>
-            </li>
-            <li 
-              className={`sidebar-item ${activeTab === 'directory' ? 'active' : ''}`}
-              onClick={() => setActiveTab('directory')}
-            >
-              <Compass size={18} />
-              <span>Trend Directory</span>
-            </li>
-            <li 
-              className={`sidebar-item ${activeTab === 'bots' ? 'active' : ''}`}
-              onClick={() => setActiveTab('bots')}
-            >
-              <Cpu size={18} />
-              <span>Scraper Bots</span>
-            </li>
-            <li 
-              className={`sidebar-item ${activeTab === 'reports' ? 'active' : ''}`}
-              onClick={() => setActiveTab('reports')}
-            >
-              <FileText size={18} />
-              <span>Reports & Alerts</span>
-            </li>
-            {/* Lead Radar */}
-            <li 
-              className={`sidebar-item ${activeTab === 'leads' ? 'active' : ''}`}
-              onClick={() => setActiveTab('leads')}
-              style={{ position: 'relative' }}
-            >
-              <Target size={18} />
-              <span>Lead Radar</span>
-              {hotLeadCount > 0 && (
-                <span style={{
-                  marginLeft: 'auto',
-                  background: '#ef4444',
-                  color: '#fff',
-                  borderRadius: '9999px',
-                  fontSize: '0.65rem',
-                  fontWeight: 800,
-                  padding: '0.1rem 0.4rem',
-                  lineHeight: 1.5,
-                  minWidth: '18px',
-                  textAlign: 'center',
-                  animation: 'hot-lead-pulse 2s ease-in-out infinite',
-                }}>
-                  {hotLeadCount}
-                </span>
-              )}
-            </li>
-          </ul>
-        </nav>
-
-        <div className="sidebar-footer">
-          <div className="sidebar-version">
-            <Terminal size={12} />
-            <span>Engine v3.0-radar</span>
-          </div>
-          <div className="sidebar-version">
-            <RefreshCw size={12} style={{ animation: activeBots > 0 ? 'spin 4s linear infinite' : 'none' }} />
-            <span>{activeBots > 0 ? `${activeBots} bots active` : 'Scanners idle'}</span>
-          </div>
-          {activeAlertCount > 0 && (
-            <div 
-              className="sidebar-version"
-              style={{ color: '#f87171', cursor: 'pointer' }}
-              onClick={() => setActiveTab('reports')}
-            >
-              <Bell size={12} />
-              <span>{activeAlertCount} alerts live</span>
-            </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {isStandalone && (
+            <span className="badge-version" style={{ color: '#06b6d4', background: 'rgba(6, 182, 212, 0.1)', border: '1px solid rgba(6, 182, 212, 0.2)' }}>
+              DEV SIMULATOR
+            </span>
           )}
+          <span className="badge-version">v1.0.0</span>
         </div>
-      </aside>
+      </header>
 
-      {/* Main Content Area */}
-      <main className="main-content">
-        <header className="main-header">
-          <div className="header-title-container">
-            <h1>{getHeaderTitle()}</h1>
-            <p>{getHeaderDescription()}</p>
+      {/* Chrome Extension Load Guidelines */}
+      {isStandalone && activeTab !== 'playground' && activeTab !== 'settings' && (
+        <div className="glass" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px', borderLeft: '4px solid var(--primary)' }}>
+          <h4 style={{ fontSize: '13px', fontWeight: '700', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Sparkles size={14} color="var(--primary)" />
+            <span>Load Aegis as a Chrome Extension</span>
+          </h4>
+          <p style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
+            To scan live webpages and use right-clicks or keyboard shortcut tracking, build and load the unpacked extension:
+          </p>
+          <ol style={{ fontSize: '11px', color: 'var(--text-secondary)', paddingLeft: '16px', lineHeight: '1.4', margin: '0' }}>
+            <li>Run <code>npm run build</code> in the project directory.</li>
+            <li>Go to <code>chrome://extensions</code> in your browser.</li>
+            <li>Turn on <strong>Developer mode</strong> (top-right toggle).</li>
+            <li>Click <strong>Load unpacked</strong> and select the <code>dist/</code> folder.</li>
+            <li>Hover element + press <strong>Control</strong> (or <strong>Option/Alt</strong>) on any webpage to scan locally!</li>
+          </ol>
+        </div>
+      )}
+
+      {/* Target Address Info */}
+      {activeTab !== 'playground' && activeTab !== 'settings' && (
+        <div className="glass" style={{ padding: '12px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ background: 'rgba(255,255,255,0.03)', padding: '8px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+            <Globe size={18} className="glow-text" style={{ color: 'var(--primary)' }} />
           </div>
-
-          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-            {activeBots > 0 ? (
-              <div className="scanner-status-tag">
-                <span className="status-dot-pulse"></span>
-                <span>{activeBots} Scrapers Live</span>
-              </div>
-            ) : (
-              <div className="scanner-status-tag" style={{ color: 'var(--text-muted)', borderColor: 'rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' }}>
-                <span className="status-dot-pulse" style={{ backgroundColor: 'var(--text-muted)', animation: 'none' }}></span>
-                <span>Scrapers Suspended</span>
-              </div>
-            )}
-
-            {hotLeadCount > 0 && (
-              <div
-                style={{ padding: '0.5rem 0.85rem', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '9999px', cursor: 'pointer', color: '#f87171', fontSize: '0.8rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-                onClick={() => setActiveTab('leads')}
-              >
-                🔴 {hotLeadCount} Hot Lead{hotLeadCount > 1 ? 's' : ''}
-              </div>
-            )}
-            
-            <div 
-              style={{ padding: '0.5rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--panel-border)', borderRadius: '50%', cursor: 'pointer', color: activeAlertCount > 0 ? 'var(--accent-pink)' : 'var(--text-muted)', position: 'relative' }}
-              title="Notifications"
-              onClick={() => setActiveTab('reports')}
-            >
-              <Bell size={18} />
-              {activeAlertCount > 0 && (
-                <span style={{ position: 'absolute', top: '-2px', right: '-2px', width: '8px', height: '8px', background: 'var(--accent-pink)', borderRadius: '50%', border: '2px solid var(--bg-primary)' }} />
-              )}
+          <div style={{ overflow: 'hidden', flex: '1' }}>
+            <div style={{ fontSize: '13px', fontWeight: '700', color: 'var(--text-primary)', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
+              {currentTitle}
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
+              {currentUrl}
             </div>
           </div>
-        </header>
+          <button 
+            onClick={triggerScan}
+            disabled={scanning || currentUrl === "Chrome Internal Page"}
+            className="btn btn-secondary" 
+            style={{ padding: '8px', borderRadius: '8px' }}
+            title="Reload scanning"
+          >
+            <RefreshCw size={14} className={scanning ? 'pulse-glow' : ''} />
+          </button>
+        </div>
+      )}
 
-        {/* Dynamic View Injection */}
-        {renderActiveView()}
+      {/* Tab Navigation */}
+      <nav className="tab-navigation">
+        <button 
+          onClick={() => setActiveTab('dashboard')} 
+          className={`tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
+        >
+          <Shield size={14} />
+          <span>Dashboard</span>
+        </button>
+        <button 
+          onClick={() => setActiveTab('inspector')} 
+          className={`tab-btn ${activeTab === 'inspector' ? 'active' : ''}`}
+        >
+          <FileText size={14} />
+          <span>Matches</span>
+        </button>
+        <button 
+          onClick={() => setActiveTab('playground')} 
+          className={`tab-btn ${activeTab === 'playground' ? 'active' : ''}`}
+        >
+          <Sparkles size={14} />
+          <span>Sandbox</span>
+        </button>
+        <button 
+          onClick={() => setActiveTab('history')} 
+          className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
+        >
+          <HistoryIcon size={14} />
+          <span>History</span>
+        </button>
+        <button 
+          onClick={() => setActiveTab('settings')} 
+          className={`tab-btn ${activeTab === 'settings' ? 'active' : ''}`}
+        >
+          <SettingsIcon size={14} />
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      {/* Active Tab View */}
+      <main style={{ flex: '1', minHeight: '0', display: 'flex', flexDirection: 'column' }}>
+        {activeTab === 'dashboard' && (
+          <DetectorDashboard 
+            scanResults={scanResults} 
+            scanning={scanning} 
+            onScanQuick={triggerScan} 
+            onScanDeep={triggerDeepScan}
+            disabled={currentUrl === "Chrome Internal Page"}
+          />
+        )}
+        {activeTab === 'inspector' && (
+          <ContentList 
+            scanResults={scanResults} 
+          />
+        )}
+        {activeTab === 'playground' && (
+          <Playground />
+        )}
+        {activeTab === 'history' && (
+          <PageHistory 
+            history={scanHistory} 
+            onClear={handleClearHistory} 
+            onSelectUrl={(url) => {
+              window.open(url, '_blank');
+            }}
+          />
+        )}
+        {activeTab === 'settings' && (
+          <Settings 
+            settings={settings} 
+            onSave={handleSaveSettings} 
+          />
+        )}
       </main>
-
-      <style>{`
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
     </div>
   );
 }
-
-export default App;

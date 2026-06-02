@@ -1,0 +1,189 @@
+import { Scan, Eye, FileText, Image as ImageIcon, Video, HelpCircle, AlertTriangle } from 'lucide-react';
+import type { ScanResults } from '../App';
+
+interface DashboardProps {
+  scanResults: ScanResults;
+  scanning: boolean;
+  onScanQuick: () => void;
+  onScanDeep: () => void;
+  disabled: boolean;
+}
+
+export default function DetectorDashboard({ scanResults, scanning, onScanQuick, onScanDeep, disabled }: DashboardProps) {
+  const { score, text, images, videos } = scanResults;
+
+  // Calculate stroke parameters for progress circle (Radius = 50, Circumference = 314.16)
+  const radius = 50;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (score / 100) * circumference;
+
+  // Determine integrity category
+  const getIntegrityStatus = (scoreValue: number) => {
+    if (scoreValue >= 80) return { label: "Human Authentic", color: "var(--success)", bg: "var(--success-glow)", desc: "This page shows high indicators of natural human authorship. Low generative density." };
+    if (scoreValue >= 45) return { label: "Mixed Integrity", color: "var(--warning)", bg: "var(--warning-glow)", desc: "This page contains a blend of human writing and potential AI-assisted copy or imagery." };
+    return { label: "Synthetic / AI Heavy", color: "var(--danger)", bg: "var(--danger-glow)", desc: "High density of generative AI writing, automated content, or synthetic visual assets." };
+  };
+
+  const status = getIntegrityStatus(score);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', flex: '1' }}>
+
+      {/* Vibecoded Warning Card */}
+      {scanResults.vibecoded?.isVibecoded && (
+        <div
+          className="glass"
+          style={{
+            padding: '16px',
+            borderRadius: '12px',
+            background: '#fef3c7',
+            border: '1px solid rgba(245, 158, 11, 0.35)',
+            boxShadow: '0 4px 12px rgba(245, 158, 11, 0.08)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+            <AlertTriangle size={20} color="#b45309" style={{ flexShrink: 0, marginTop: '2px' }} />
+            <div>
+              <h4 style={{ fontSize: '12px', fontWeight: '700', color: '#78350f', lineHeight: '1.4', margin: 0 }}>
+                This website might be VibeCoded. Proceed with caution.
+              </h4>
+              {scanResults.vibecoded.reasons && scanResults.vibecoded.reasons.length > 0 && (
+                <ul style={{ paddingLeft: '16px', margin: '8px 0 0 0', fontSize: '11px', color: '#92400e', lineHeight: '1.4' }}>
+                  {scanResults.vibecoded.reasons.map((reason, idx) => (
+                    <li key={idx} style={{ marginBottom: '2px' }}>{reason}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Circular Gauge Card */}
+      <div className={`glass ${scanning ? 'scan-animation' : ''}`} style={{ padding: '24px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
+        <h3 style={{ fontSize: '14px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)' }}>
+          Authenticity Evaluation
+        </h3>
+
+        <div className="gauge-wrapper">
+          <svg className="gauge-svg" viewBox="0 0 120 120">
+            <circle className="gauge-bg" cx="60" cy="60" r={radius} />
+            <circle
+              className="gauge-fill"
+              cx="60"
+              cy="60"
+              r={radius}
+              stroke={status.color}
+              strokeDasharray={circumference}
+              strokeDashoffset={strokeDashoffset}
+              style={{
+                filter: `drop-shadow(0 0 6px ${status.color})`
+              }}
+            />
+          </svg>
+          <div className="gauge-label">
+            <span className="gauge-value" style={{ color: status.color }}>
+              {scanning ? '...' : `${score}%`}
+            </span>
+            <span className="gauge-desc">Integrity</span>
+          </div>
+        </div>
+
+        <div>
+          <span
+            style={{
+              display: 'inline-block',
+              padding: '4px 12px',
+              borderRadius: '20px',
+              fontSize: '13px',
+              fontWeight: '700',
+              color: status.color,
+              background: status.bg,
+              border: `1px solid ${status.color}33`,
+              marginBottom: '8px'
+            }}
+          >
+            {scanning ? 'Analyzing Elements...' : status.label}
+          </span>
+          <p style={{ fontSize: '12px', color: 'var(--text-secondary)', maxWidth: '320px', margin: '0 auto', lineHeight: '1.5' }}>
+            {scanning ? 'Performing deep heuristic matrix scan of DOM text lengths, file headers, and framerate stability.' : status.desc}
+          </p>
+        </div>
+      </div>
+
+      {/* Grid Stats */}
+      <div className="dashboard-grid">
+        <div className="glass stat-card" style={{ borderLeft: `3px solid ${text.length > 0 ? 'var(--warning)' : 'var(--border-color)'}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
+            <FileText size={14} />
+            <span style={{ fontSize: '11px', fontWeight: '600' }}>AI TEXT</span>
+          </div>
+          <div className="stat-val" style={{ color: text.length > 0 ? 'var(--warning)' : 'var(--text-primary)' }}>
+            {text.length}
+          </div>
+        </div>
+
+        <div className="glass stat-card" style={{ borderLeft: `3px solid ${images.length > 0 ? 'var(--danger)' : 'var(--border-color)'}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
+            <ImageIcon size={14} />
+            <span style={{ fontSize: '11px', fontWeight: '600' }}>AI IMAGES</span>
+          </div>
+          <div className="stat-val" style={{ color: images.length > 0 ? 'var(--danger)' : 'var(--text-primary)' }}>
+            {images.length}
+          </div>
+        </div>
+
+        <div className="glass stat-card" style={{ borderLeft: `3px solid ${videos.length > 0 ? 'var(--danger)' : 'var(--border-color)'}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', color: 'var(--text-secondary)' }}>
+            <Video size={14} />
+            <span style={{ fontSize: '11px', fontWeight: '600' }}>AI VIDEOS</span>
+          </div>
+          <div className="stat-val" style={{ color: videos.length > 0 ? 'var(--danger)' : 'var(--text-primary)' }}>
+            {videos.length}
+          </div>
+        </div>
+      </div>
+
+      {/* Primary Scanning Actions */}
+      <div className="glass" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <button
+          onClick={onScanDeep}
+          disabled={scanning || disabled}
+          className="btn btn-primary"
+          style={{ width: '100%', padding: '12px' }}
+        >
+          <Eye size={16} />
+          <span>{scanning ? 'Laser Sweeping Webpage...' : 'Trigger Visual Deep Scan'}</span>
+        </button>
+
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button
+            onClick={onScanQuick}
+            disabled={scanning || disabled}
+            className="btn btn-secondary"
+            style={{ flex: '1', padding: '10px' }}
+          >
+            <Scan size={14} />
+            <span>Re-Scan Page</span>
+          </button>
+        </div>
+
+        {disabled && (
+          <p style={{ fontSize: '10px', color: 'var(--danger)', textAlign: 'center', marginTop: '4px' }}>
+            🔒 Chrome extension API is locked on this browser tab (e.g. system page).
+          </p>
+        )}
+      </div>
+
+      {/* Quick guide */}
+      <div style={{ display: 'flex', gap: '8px', padding: '0 4px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: '1.4' }}>
+        <HelpCircle size={14} style={{ flexShrink: 0 }} />
+        <span>Aegis injects overlays onto suspected blocks in real-time. Hover/click tags directly on the webpage to inspect EXIF markers or text heuristics.</span>
+      </div>
+
+    </div>
+  );
+}
