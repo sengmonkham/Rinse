@@ -524,6 +524,15 @@ const analyzeTextHeuristics = (text) => {
     reasons.push(`High density of hyphenated word compounds (${uniqueHyphens.length} unique)`);
   }
 
+  // Em-dash & En-dash transition checks: "—" or "–"
+  // Highly characteristic of machine summaries separating side notes
+  const dashRegex = /[\u2014\u2013]/g;
+  const dashCount = (cleanText.match(dashRegex) || []).length;
+  if (dashCount > 0) {
+    score += 20 * Math.min(dashCount, 2);
+    reasons.push(`Generative punctuation: Detected Em-dash or En-dash ('—' / '–') as clause separator`);
+  }
+
   // 4. Overused AI Corporate Speak & Buzzwords
   const aiBuzzwords = [
     { term: /as an ai language model/i, points: 50, label: "AI model disclaimer boilerplate" },

@@ -113,6 +113,14 @@ export default function Playground() {
         flags.push(`High density of hyphenated descriptive compounds (${uniqueHyphens.length} unique)`);
       }
 
+      // Em-dash & En-dash transition checks: "—" or "–"
+      const dashRegex = /[\u2014\u2013]/g;
+      const dashCount = (text.match(dashRegex) || []).length;
+      if (dashCount > 0) {
+        score += 20 * Math.min(dashCount, 2);
+        flags.push(`Generative punctuation: Detected Em-dash or En-dash ('—' / '–') as clause separator`);
+      }
+
       // 4. Overused AI Corporate Speak & Buzzwords
       const aiBuzzwords = [
         { term: /as an ai language model/i, points: 50, label: "AI model disclaimer boilerplate" },
