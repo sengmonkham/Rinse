@@ -196,7 +196,7 @@ export default function DetectorDashboard({ scanResults, scanning, onScanQuick, 
 
         {disabled && (
           <p style={{ fontSize: '10px', color: 'var(--danger)', textAlign: 'center', marginTop: '4px' }}>
-            🔒 Chrome extension API is locked on this browser tab (e.g. system page).
+            Chrome extension API is locked on this browser tab (e.g. system page).
           </p>
         )}
       </div>

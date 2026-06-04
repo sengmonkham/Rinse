@@ -6,13 +6,15 @@ import {
   History as HistoryIcon, 
   Sparkles, 
   Globe,
-  RefreshCw
+  RefreshCw,
+  Keyboard
 } from 'lucide-react';
 import DetectorDashboard from './components/DetectorDashboard';
 import ContentList from './components/ContentList';
 import Playground from './components/Playground';
 import PageHistory from './components/PageHistory';
 import Settings from './components/Settings';
+import ProofOfWork from './components/ProofOfWork';
 
 declare const chrome: any;
 
@@ -59,7 +61,7 @@ export interface AppSettings {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'inspector' | 'playground' | 'history' | 'settings'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'inspector' | 'playground' | 'history' | 'settings' | 'pow'>('dashboard');
   const [isStandalone, setIsStandalone] = useState(true);
   const [currentUrl, setCurrentUrl] = useState("Local Dashboard Preview");
   const [currentTitle, setCurrentTitle] = useState("Standalone Simulator");
@@ -319,7 +321,7 @@ export default function App() {
       </header>
 
       {/* Chrome Extension Load Guidelines */}
-      {isStandalone && activeTab !== 'playground' && activeTab !== 'settings' && (
+      {isStandalone && activeTab !== 'playground' && activeTab !== 'settings' && activeTab !== 'pow' && (
         <div className="glass" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px', borderLeft: '4px solid var(--primary)' }}>
           <h4 style={{ fontSize: '13px', fontWeight: '700', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Sparkles size={14} color="var(--primary)" />
@@ -339,7 +341,7 @@ export default function App() {
       )}
 
       {/* Target Address Info */}
-      {activeTab !== 'playground' && activeTab !== 'settings' && (
+      {activeTab !== 'playground' && activeTab !== 'settings' && activeTab !== 'pow' && (
         <div className="glass" style={{ padding: '12px', display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{ background: 'rgba(255,255,255,0.03)', padding: '8px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
             <Globe size={18} className="glow-text" style={{ color: 'var(--primary)' }} />
@@ -388,6 +390,13 @@ export default function App() {
           <span>Sandbox</span>
         </button>
         <button 
+          onClick={() => setActiveTab('pow')} 
+          className={`tab-btn ${activeTab === 'pow' ? 'active' : ''}`}
+        >
+          <Keyboard size={14} />
+          <span>Writer POW</span>
+        </button>
+        <button 
           onClick={() => setActiveTab('history')} 
           className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
         >
@@ -423,6 +432,9 @@ export default function App() {
         )}
         {activeTab === 'playground' && (
           <Playground />
+        )}
+        {activeTab === 'pow' && (
+          <ProofOfWork />
         )}
         {activeTab === 'history' && (
           <PageHistory 

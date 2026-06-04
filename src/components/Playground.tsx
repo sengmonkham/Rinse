@@ -391,6 +391,7 @@ export default function Playground() {
         stats: stats,
         suggestions: suggestionsList
       });
+    }, 1000);
   };
 
   const handleApplySuggestion = (term: string, replacement: string) => {
@@ -590,7 +591,7 @@ export default function Playground() {
                 <span>Clear</span>
               </button>
               <button 
-                onClick={handleAnalyzeText}
+                onClick={() => handleAnalyzeText()}
                 className="btn btn-primary"
                 style={{ padding: '8px 16px' }}
                 disabled={analyzing || textVal.trim().length < 20}
@@ -654,6 +655,58 @@ export default function Playground() {
                   ))}
                 </div>
               </div>
+
+              {textResults.suggestions && textResults.suggestions.length > 0 && (
+                <div className="glass" style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px', borderLeft: '4px solid var(--primary)', background: '#f0fdf4', borderColor: '#16a34a' }}>
+                  <h4 style={{ fontSize: '12px', textTransform: 'uppercase', color: '#15803d', fontWeight: '700', margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Sparkles size={14} color="#16a34a" />
+                    <span>Humanizer Co-Pilot Suggestions</span>
+                  </h4>
+                  <p style={{ fontSize: '11px', color: '#166534', margin: 0 }}>
+                    Click on any suggestion below to replace the AI copywriting keyword/layout in your draft.
+                  </p>
+                  
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '4px' }}>
+                    {textResults.suggestions.map((item: any, idx: number) => (
+                      <div key={idx} style={{ padding: '10px', background: '#ffffff', borderRadius: '8px', border: '1px solid #d1fae5', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '11.5px', fontWeight: '700', color: '#111827' }}>
+                            Found: "{item.term}"
+                          </span>
+                          <span style={{ fontSize: '9px', color: '#059669', background: '#d1fae5', padding: '2px 6px', borderRadius: '4px', fontWeight: '600' }}>
+                            AI Marker
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#374151', lineHeight: '1.4' }}>
+                          {item.explanation}
+                        </div>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '2px' }}>
+                          {item.suggestions.map((sugg: string, sIdx: number) => (
+                            <button
+                              key={sIdx}
+                              onClick={() => handleApplySuggestion(item.term, sugg)}
+                              className="btn"
+                              style={{ 
+                                padding: '4px 10px', 
+                                fontSize: '10.5px', 
+                                background: '#10b981', 
+                                color: 'white', 
+                                border: 'none',
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                fontWeight: '600',
+                                boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                              }}
+                            >
+                              Replace with "{sugg}"
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

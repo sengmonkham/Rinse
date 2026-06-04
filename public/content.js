@@ -287,7 +287,7 @@ const injectStyles = () => {
     }
 
     .aegis-risk-red {
-      background: linear-gradient(90deg, #EF4444, #EC4899);
+      background: linear-gradient(90deg, #EF4444, #DC2626);
       box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
     }
     
@@ -337,12 +337,12 @@ const injectStyles = () => {
     .aegis-floating-tooltip {
       position: absolute;
       width: 280px;
-      background: rgba(15, 23, 42, 0.95);
+      background: transparent !important;
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
       border: 1px solid rgba(255, 255, 255, 0.1);
       border-radius: 12px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 15px rgba(6, 182, 212, 0.15);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5) !important;
       color: #E2E8F0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       padding: 12px;
@@ -1189,7 +1189,7 @@ const showVibecodedNotification = () => {
   topBar.className = "aegis-vibecoded-topbar";
   topBar.innerHTML = `
     <div style="display:flex; align-items:center; gap:8px;">
-      <span style="font-size: 16px; flex-shrink: 0;">⚠️</span>
+      <span style="font-size: 12px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid #7f1d1d; color: #7f1d1d; font-weight: 800; font-family: sans-serif; line-height: 1;">!</span>
       <span style="text-align: left; font-weight: 700;">This site may be VibeCoded. Proceed with caution.</span>
     </div>
     <button class="aegis-vibecoded-close" id="aegis-vibecoded-close-btn">Dismiss</button>
@@ -1310,7 +1310,7 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
 
         const badge = document.createElement("span");
         badge.className = `aegis-badge ${result.score >= 60 ? "aegis-badge-ai" : "aegis-badge-suspected"}`;
-        badge.innerHTML = `🛡️ AI ${result.score}%`;
+        badge.innerHTML = `AI ${result.score}%`;
         badge.addEventListener("click", (e) => {
           e.stopPropagation();
           openDiagnosticDrawer(item, "text");
@@ -1360,7 +1360,7 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
         if (parent && !parent.classList.contains("aegis-media-container")) {
           const badge = document.createElement("span");
           badge.className = `aegis-badge ${imgResult.score >= 60 ? "aegis-badge-ai" : "aegis-badge-suspected"} aegis-media-overlay-badge`;
-          badge.innerHTML = `🖼️ AI IMAGE ${imgResult.score}%`;
+          badge.innerHTML = `AI IMAGE ${imgResult.score}%`;
           badge.addEventListener("click", (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -1430,7 +1430,7 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
         if (parent) {
           const badge = document.createElement("span");
           badge.className = `aegis-badge aegis-badge-ai aegis-media-overlay-badge`;
-          badge.innerHTML = `🎥 AI VIDEO 98%`;
+          badge.innerHTML = `AI VIDEO 98%`;
           badge.addEventListener("click", (e) => {
             e.preventDefault();
             e.stopPropagation();

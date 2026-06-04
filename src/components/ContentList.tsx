@@ -101,7 +101,7 @@ export default function ContentList({ scanResults }: ContentListProps) {
                     HTML &lt;{item.tagName}&gt; Node
                   </span>
                   <span style={{ fontSize: '12px', fontWeight: '700', color: getScoreColor(item.score) }}>
-                    🛡️ AI Likelihood: {item.score}%
+                    AI Likelihood: {item.score}%
                   </span>
                 </div>
                 
@@ -146,7 +146,7 @@ export default function ContentList({ scanResults }: ContentListProps) {
                       {item.width} x {item.height} px
                     </span>
                     <span style={{ fontSize: '12px', fontWeight: '700', color: getScoreColor(item.score), whiteSpace: 'nowrap' }}>
-                      🖼️ AI: {item.score}%
+                      AI: {item.score}%
                     </span>
                   </div>
 
@@ -190,7 +190,7 @@ export default function ContentList({ scanResults }: ContentListProps) {
                     Source: {item.src?.substring(item.src?.lastIndexOf('/') + 1) || 'Embedded Stream'}
                   </span>
                   <span style={{ fontSize: '12px', fontWeight: '700', color: getScoreColor(item.score) }}>
-                    🎥 AI: {item.score}%
+                    AI: {item.score}%
                   </span>
                 </div>
 
