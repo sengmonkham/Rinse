@@ -123,19 +123,20 @@ export default function Playground() {
         { char: "🔥", label: "Fire emoji (hype descriptor)" }
       ];
 
+      let emojiScore = 0;
       let matchedEmojis = [];
       corporateEmojis.forEach(emoji => {
         const regex = new RegExp(emoji.char, "g");
         const count = (text.match(regex) || []).length;
         if (count > 0) {
-          score += 15 * Math.min(count, 2);
+          emojiScore += 15 * Math.min(count, 2);
           matchedEmojis.push(emoji.char);
           flags.push(`Emoji detected: ${emoji.char} - ${emoji.label}`);
         }
       });
 
       if (matchedEmojis.length > 2) {
-        score += 10;
+        emojiScore += 10;
         flags.push("Multiple corporate/hype emojis (highly generative layout signature)");
       }
 
@@ -230,14 +231,14 @@ export default function Playground() {
         const containsQuestion = firstLine.includes('?');
         const containsEmoji = /[\u{1F300}-\u{1F9FF}\u{2700}-\u{27BF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{2600}-\u{26FF}]/u.test(firstLine);
         if (containsQuestion && containsEmoji) {
-          score += 30;
+          emojiScore += 30;
           flags.push("AI Hook Style: Text starts with a rhetorical question containing an emoji");
         }
 
         // Check for robot, alert, or corporate emojis in the first line specifically
         const targetEmojis = /🤖|🌐|💻|📢|🚀|✨|💡|🎯|📈|💼|🤝|🚨|⚠️|✅|❌|🔍|📊|😵|🔥|💥|🌟|⚡|👇/u;
         if (targetEmojis.test(firstLine)) {
-          score += 45;
+          emojiScore += 45;
           flags.push("AI Hook Style: First line starts with or contains a robot, warning, or corporate emoji");
         }
       }
@@ -245,9 +246,17 @@ export default function Playground() {
       // 5b. Paragraphs starting with emojis (typical AI list/bullet spacing structure)
       const emojiStartLines = lines.filter(line => /^(🤖|🌐|💻|📢|🚀|✨|💡|🎯|📈|💼|🤝|🚨|⚠️|✅|❌|🔍|📊|😵|🔥|💥|🌟|⚡|👇)/u.test(line));
       if (emojiStartLines.length >= 2) {
-        score += 30;
+        emojiScore += 30;
         flags.push(`AI Formatting Structure: Multiple paragraphs start with corporate/robot emojis (x${emojiStartLines.length})`);
       }
+
+      // Capping emoji score if no primary LLM emojis are present
+      const hasLlmEmojis = /🚀|✅|✨|💡/u.test(text);
+      if (!hasLlmEmojis && emojiScore > 20) {
+        emojiScore = 20;
+        flags.push("Emoji score capped at 20 (no primary LLM emojis like 🚀, ✅, ✨, or 💡 present)");
+      }
+      score += emojiScore;
 
       // 6. Concluding call to engagement question
       if (lines.length > 2) {
@@ -381,6 +390,45 @@ export default function Playground() {
             explanation: "AI copywriting style often breaks every sentence into its own line. Combining them into fuller paragraphs improves cadence and readability."
           });
         }
+      }
+
+      // Capitalization & Grammar Checks (Human Indicators)
+      let humanScoreReduction = 0;
+      
+      // A. Check if sentences start with a lowercase letter
+      const textSentences = text.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 0);
+      let lowerCaseStarts = 0;
+      textSentences.forEach(s => {
+        const firstCharMatch = s.match(/[a-zA-Z]/);
+        if (firstCharMatch) {
+          const firstChar = firstCharMatch[0];
+          if (firstChar === firstChar.toLowerCase()) {
+            lowerCaseStarts++;
+          }
+        }
+      });
+      if (lowerCaseStarts > 0) {
+        humanScoreReduction += 25 * Math.min(lowerCaseStarts, 2);
+        flags.push(`Human indicator: Sentences starting with lowercase letter (x${lowerCaseStarts})`);
+      }
+
+      // B. Check for lowercase 'i' pronouns (i, i'm, i'd, i've, i'll)
+      const lowercaseIPattern = /\b(i|i'm|i'd|i've|i'll)\b/g;
+      const lowercaseIMatches = text.match(lowercaseIPattern);
+      if (lowercaseIMatches) {
+        humanScoreReduction += 15 * Math.min(lowercaseIMatches.length, 2);
+        flags.push(`Human indicator: Lowercase 'i' pronoun usage (x${lowercaseIMatches.length})`);
+      }
+
+      // C. Check for missing terminal punctuation
+      const hasTerminalPunctuation = /[.!?]$/.test(text.trim());
+      if (text.trim().length > 20 && !hasTerminalPunctuation) {
+        humanScoreReduction += 15;
+        flags.push("Human indicator: Casual punctuation (missing terminal period/question/exclamation)");
+      }
+
+      if (humanScoreReduction > 0) {
+        score = Math.max(1, score - humanScoreReduction);
       }
 
       const finalAIScore = Math.min(99, Math.max(1, score));
