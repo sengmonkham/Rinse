@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
 import type { ChangeEvent } from 'react';
 import { Sparkles, FileText, Image as ImageIcon, Send, Trash2, ShieldAlert, ShieldCheck } from 'lucide-react';
+import type { AppSettings } from '../App';
 
 const humanizerDatabase: Record<string, { term: string; suggestions: string[]; explanation: string }> = {
   "delve": {
@@ -75,7 +76,11 @@ const humanizerDatabase: Record<string, { term: string; suggestions: string[]; e
   }
 };
 
-export default function Playground() {
+interface PlaygroundProps {
+  settings?: AppSettings;
+}
+
+export default function Playground({ settings }: PlaygroundProps) {
   const [sandboxType, setSandboxType] = useState<'text' | 'image'>('text');
   
   // Text analysis states
@@ -469,6 +474,60 @@ export default function Playground() {
     if (!targetUrl) return;
     setAnalyzing(true);
     setImgResults(null);
+
+    const activeSettings = settings || {
+      enableTextScan: true,
+      enableImageScan: true,
+      enableVideoScan: true,
+      sensitivity: 50,
+      showInlineBadges: true,
+      apiMode: "local",
+      apiUrl: "",
+      apiKey: ""
+    };
+
+    if (activeSettings.apiMode === 'cloud') {
+      const apiEndpoint = activeSettings.apiUrl || 'http://localhost:5000/predict';
+      
+      // Perform actual fetch request to the cloud detector
+      fetch(apiEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(activeSettings.apiKey ? { 'Authorization': `Bearer ${activeSettings.apiKey}` } : {})
+        },
+        body: JSON.stringify({
+          image_url: targetUrl.startsWith('data:') ? null : targetUrl,
+          image_base64: targetUrl.startsWith('data:') ? targetUrl : null
+        })
+      })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Server returned status ${response.status}: ${response.statusText}`);
+        }
+        return response.json();
+      })
+      .then((data) => {
+        setAnalyzing(false);
+        setImgResults({
+          score: data.score,
+          reasons: data.reasons || ["Analyzed via DetectZoo cloud service."],
+          url: targetUrl
+        });
+      })
+      .catch((err) => {
+        setAnalyzing(false);
+        setImgResults({
+          score: 50,
+          reasons: [
+            `Cloud prediction failed: ${err.message}`,
+            "Make sure your DetectZoo server is running (e.g. server.py on localhost:5000) and CORS is enabled."
+          ],
+          url: targetUrl
+        });
+      });
+      return;
+    }
 
     // Try real fetch on local client side, if CORS blocks or fails, simulate metadata audit
     setTimeout(async () => {

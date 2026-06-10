@@ -431,7 +431,7 @@ export default function App() {
           />
         )}
         {activeTab === 'playground' && (
-          <Playground />
+          <Playground settings={settings} />
         )}
         {activeTab === 'pow' && (
           <ProofOfWork />
