@@ -22,10 +22,10 @@ detector = None
 
 try:
     from detectzoo import load_detector
-    # Load default image detector. 'aide' is a standard image forensic classifier in DetectZoo.
-    # We load on CPU by default for portability, but device can be customized.
-    print("Loading DetectZoo 'aide' model (device: cpu)...")
-    detector = load_detector("aide", device="cpu")
+    # Load image detector. 'cnnspot' (280MB) is default. Can be set to 'univfd' (1.7GB) via environment variable.
+    model_name = os.environ.get("MODEL_NAME", "cnnspot")
+    print(f"Loading DetectZoo '{model_name}' model (device: cpu)...")
+    detector = load_detector(model_name, device="cpu")
     DETECTZOO_AVAILABLE = True
     print("DetectZoo successfully loaded!")
 except Exception as e:

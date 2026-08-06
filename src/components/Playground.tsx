@@ -481,13 +481,15 @@ export default function Playground({ settings }: PlaygroundProps) {
       enableVideoScan: true,
       sensitivity: 50,
       showInlineBadges: true,
-      apiMode: "local",
-      apiUrl: "",
+      autoImageOverlays: false,
+      showVibecodedAlert: false,
+      apiMode: "cloud",
+      apiUrl: "http://localhost:5001/predict",
       apiKey: ""
     };
 
     if (activeSettings.apiMode === 'cloud') {
-      const apiEndpoint = activeSettings.apiUrl || 'http://localhost:5000/predict';
+      const apiEndpoint = activeSettings.apiUrl || 'http://localhost:5001/predict';
       
       // Perform actual fetch request to the cloud detector
       fetch(apiEndpoint, {

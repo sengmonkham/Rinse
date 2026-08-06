@@ -117,6 +117,17 @@ const injectStyles = () => {
       display: none !important;
     }
 
+    body.aegis-hide-image-overlays .aegis-image-highlight-ai,
+    body.aegis-hide-image-overlays .aegis-image-highlight-suspected {
+      outline: none !important;
+      box-shadow: none !important;
+    }
+
+    body.aegis-hide-image-overlays .aegis-media-overlay-badge,
+    body.aegis-hide-image-overlays .aegis-image-overlay-text {
+      display: none !important;
+    }
+
     .aegis-hover-focus {
       outline: 2px dashed #06B6D4 !important;
       outline-offset: 2px !important;
@@ -1260,6 +1271,7 @@ const showVibecodedNotification = () => {
 
 // Scan the whole DOM
 const performPageScan = async (options = { text: true, images: true, videos: true }) => {
+  injectStyles();
   const purpleGradientResult = detectPurpleGradient();
   const bubbleHeaderResult = detectBubbleHeader();
   const isVibecoded = purpleGradientResult.detected || bubbleHeaderResult.detected;
@@ -1278,13 +1290,22 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
     vibecodedData.reasons.push(`Rounded pill/bubble announcement header in hero: "${bubbleHeaderResult.text}"`);
   }
 
+  const settingsResult = await new Promise((resolve) => {
+    try {
+      chrome.storage.local.get(["settings"], (res) => resolve(res ? res.settings : null));
+    } catch (e) {
+      resolve(null);
+    }
+  });
+  const showVibe = (settingsResult && settingsResult.showVibecodedAlert !== undefined) ? settingsResult.showVibecodedAlert : false;
+
   const existingVibeBar = document.getElementById("aegis-vibecoded-top-bar");
-  if (existingVibeBar && !isVibecoded) {
+  if (existingVibeBar && (!isVibecoded || !showVibe)) {
     existingVibeBar.remove();
     document.body.style.marginTop = "0px";
   }
 
-  if (isVibecoded) {
+  if (isVibecoded && showVibe) {
     showVibecodedNotification();
   }
 
@@ -1811,6 +1832,35 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const isHidden = document.body.classList.contains("aegis-hide-ai-active");
     sendResponse({ status: "success", isHidden: isHidden });
   }
+
+  else if (request.action === "updateSettings") {
+    const settings = request.settings;
+    
+    // Image overlays setting
+    const autoOverlays = (settings && settings.autoImageOverlays !== undefined) ? settings.autoImageOverlays : false;
+    if (autoOverlays) {
+      document.body.classList.remove("aegis-hide-image-overlays");
+    } else {
+      document.body.classList.add("aegis-hide-image-overlays");
+    }
+
+    // VibeCoded alert setting
+    const showVibe = (settings && settings.showVibecodedAlert !== undefined) ? settings.showVibecodedAlert : false;
+    const existingVibeBar = document.getElementById("aegis-vibecoded-top-bar");
+    if (showVibe) {
+      if (scanResults.vibecoded && scanResults.vibecoded.isVibecoded) {
+        showVibecodedNotification();
+      }
+    } else {
+      if (existingVibeBar) {
+        existingVibeBar.classList.remove("show");
+        document.body.style.marginTop = "0px";
+        setTimeout(() => existingVibeBar.remove(), 400);
+      }
+    }
+
+    sendResponse({ status: "success" });
+  }
 });
 
 // Initialize on page load
@@ -1820,6 +1870,12 @@ try {
     const enableText = settings ? settings.enableTextScan : true;
     const enableImg = settings ? settings.enableImageScan : true;
     const enableVid = settings ? settings.enableVideoScan : true;
+    const autoOverlays = (settings && settings.autoImageOverlays !== undefined) ? settings.autoImageOverlays : false;
+
+    injectStyles();
+    if (!autoOverlays) {
+      document.body.classList.add("aegis-hide-image-overlays");
+    }
 
     setTimeout(() => {
       performPageScan({

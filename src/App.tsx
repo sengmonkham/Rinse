@@ -55,6 +55,8 @@ export interface AppSettings {
   enableVideoScan: boolean;
   sensitivity: number;
   showInlineBadges: boolean;
+  autoImageOverlays: boolean;
+  showVibecodedAlert: boolean;
   apiMode: string;
   apiUrl: string;
   apiKey: string;
@@ -87,8 +89,10 @@ export default function App() {
     enableVideoScan: true,
     sensitivity: 50,
     showInlineBadges: true,
-    apiMode: "local",
-    apiUrl: "",
+    autoImageOverlays: false,
+    showVibecodedAlert: false,
+    apiMode: "cloud",
+    apiUrl: "http://localhost:5001/predict",
     apiKey: ""
   });
 
@@ -188,6 +192,7 @@ export default function App() {
         const tab = tabs[0];
         if (tab && tab.id) {
           chrome.tabs.sendMessage(tab.id, { action: "toggleHUD", enabled: newSettings.showInlineBadges });
+          chrome.tabs.sendMessage(tab.id, { action: "updateSettings", settings: newSettings });
         }
       });
     } else {

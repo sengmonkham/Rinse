@@ -14,6 +14,8 @@ chrome.runtime.onInstalled.addListener(() => {
           enableVideoScan: true,
           sensitivity: 50, // 0 to 100
           showInlineBadges: true,
+          autoImageOverlays: false,
+          showVibecodedAlert: false,
           apiMode: "local", // "local" or "cloud"
           apiUrl: "",
           apiKey: ""
@@ -108,10 +110,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   else if (request.action === "fetchImageMetadata") {
     const imgUrl = request.url;
     chrome.storage.local.get(["settings"], (result) => {
-      const settings = result.settings || {};
+      let settings = result.settings || {};
       
-      if (settings.apiMode === "cloud") {
-        const apiEndpoint = settings.apiUrl || "http://localhost:5000/predict";
+      // Auto-migrate old default local settings to new cloud default port 5001
+      if (!settings.apiMode || (settings.apiMode === "local" && !settings.apiUrl)) {
+        settings.apiMode = "cloud";
+        settings.apiUrl = "http://localhost:5001/predict";
+        chrome.storage.local.set({ settings });
+      }
+      
+      const apiMode = settings.apiMode;
+      if (apiMode === "cloud") {
+        const apiEndpoint = settings.apiUrl || "http://localhost:5001/predict";
         
         fetch(apiEndpoint, {
           method: "POST",
@@ -131,7 +141,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         .then(data => {
           sendResponse({
             status: "success",
-            found: data.score >= 50,
+            found: true, // Always return successful cloud API response
             score: data.score,
             reasons: data.reasons || ["Detected via cloud service."],
             url: imgUrl

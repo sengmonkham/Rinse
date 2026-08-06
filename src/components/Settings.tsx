@@ -13,6 +13,8 @@ export default function Settings({ settings, onSave }: SettingsProps) {
   const [enableVideo, setEnableVideo] = useState(settings.enableVideoScan);
   const [sensitivity, setSensitivity] = useState(settings.sensitivity);
   const [inlineBadges, setInlineBadges] = useState(settings.showInlineBadges);
+  const [autoImageOverlays, setAutoImageOverlays] = useState(settings.autoImageOverlays !== undefined ? settings.autoImageOverlays : false);
+  const [showVibecodedAlert, setShowVibecodedAlert] = useState(settings.showVibecodedAlert !== undefined ? settings.showVibecodedAlert : false);
   const [apiMode, setApiMode] = useState(settings.apiMode);
   const [apiUrl, setApiUrl] = useState(settings.apiUrl);
   const [apiKey, setApiKey] = useState(settings.apiKey);
@@ -26,6 +28,8 @@ export default function Settings({ settings, onSave }: SettingsProps) {
       enableVideoScan: enableVideo,
       sensitivity: sensitivity,
       showInlineBadges: inlineBadges,
+      autoImageOverlays: autoImageOverlays,
+      showVibecodedAlert: showVibecodedAlert,
       apiMode: apiMode,
       apiUrl: apiUrl,
       apiKey: apiKey
@@ -41,8 +45,10 @@ export default function Settings({ settings, onSave }: SettingsProps) {
     setEnableVideo(true);
     setSensitivity(50);
     setInlineBadges(true);
-    setApiMode('local');
-    setApiUrl('');
+    setAutoImageOverlays(false);
+    setShowVibecodedAlert(false);
+    setApiMode('cloud');
+    setApiUrl('http://localhost:5001/predict');
     setApiKey('');
   };
 
@@ -119,6 +125,36 @@ export default function Settings({ settings, onSave }: SettingsProps) {
               type="checkbox" 
               checked={inlineBadges} 
               onChange={(e) => setInlineBadges(e.target.checked)} 
+            />
+            <span className="slider"></span>
+          </label>
+        </div>
+
+        <div className="switch-row">
+          <div>
+            <div style={{ fontSize: '12px', fontWeight: '700' }}>Show Image Overlays Automatically</div>
+            <div style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Displays AI image boxes on load (if off, hold Option/Alt key to show)</div>
+          </div>
+          <label className="switch">
+            <input 
+              type="checkbox" 
+              checked={autoImageOverlays} 
+              onChange={(e) => setAutoImageOverlays(e.target.checked)} 
+            />
+            <span className="slider"></span>
+          </label>
+        </div>
+
+        <div className="switch-row">
+          <div>
+            <div style={{ fontSize: '12px', fontWeight: '700' }}>Show VibeCoded Alerts</div>
+            <div style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Displays top banner alert warning when visiting VibeCoded websites</div>
+          </div>
+          <label className="switch">
+            <input 
+              type="checkbox" 
+              checked={showVibecodedAlert} 
+              onChange={(e) => setShowVibecodedAlert(e.target.checked)} 
             />
             <span className="slider"></span>
           </label>
