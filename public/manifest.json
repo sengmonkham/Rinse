@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Aegis AI - Content Authenticity Detector",
+  "name": "Detoxify - AI Content Authenticity Detector",
   "version": "1.0.0",
   "description": "Real-time AI detector for web text, images, and video content. Scans websites and displays confidence scores.",
   "permissions": [

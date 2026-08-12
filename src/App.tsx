@@ -16,8 +16,6 @@ import PageHistory from './components/PageHistory';
 import Settings from './components/Settings';
 import ProofOfWork from './components/ProofOfWork';
 
-declare const chrome: any;
-
 export interface ScanStats {
   textCount: number;
   imageCount: number;
@@ -62,9 +60,28 @@ export interface AppSettings {
   apiKey: string;
 }
 
+const DEFAULT_SETTINGS: AppSettings = {
+  enableTextScan: true,
+  enableImageScan: true,
+  enableVideoScan: true,
+  sensitivity: 50,
+  showInlineBadges: true,
+  autoImageOverlays: false,
+  showVibecodedAlert: false,
+  apiMode: "local",
+  apiUrl: "",
+  apiKey: ""
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'inspector' | 'playground' | 'history' | 'settings' | 'pow'>('dashboard');
-  const [isStandalone, setIsStandalone] = useState(true);
+  const [isStandalone] = useState(() => {
+    const hasChrome = typeof window !== "undefined" &&
+      typeof window.chrome !== "undefined" &&
+      typeof chrome.runtime !== "undefined" &&
+      typeof chrome.runtime.id !== "undefined";
+    return !hasChrome;
+  });
   const [currentUrl, setCurrentUrl] = useState("Local Dashboard Preview");
   const [currentTitle, setCurrentTitle] = useState("Standalone Simulator");
   const [scanning, setScanning] = useState(false);
@@ -83,30 +100,40 @@ export default function App() {
     }
   });
 
-  const [settings, setSettings] = useState<AppSettings>({
-    enableTextScan: true,
-    enableImageScan: true,
-    enableVideoScan: true,
-    sensitivity: 50,
-    showInlineBadges: true,
-    autoImageOverlays: false,
-    showVibecodedAlert: false,
-    apiMode: "cloud",
-    apiUrl: "http://localhost:5001/predict",
-    apiKey: ""
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    if (typeof window === "undefined") return DEFAULT_SETTINGS;
+    const saved = localStorage.getItem("aegis_settings");
+    if (saved) {
+      try {
+        return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+      } catch {
+        // Ignore corrupt saved settings
+      }
+    }
+    return DEFAULT_SETTINGS;
   });
 
-  const [scanHistory, setScanHistory] = useState<any[]>([]);
+  const [scanHistory, setScanHistory] = useState<ScanHistoryEntry[]>(() => {
+    if (typeof window === "undefined") return [];
+    const saved = localStorage.getItem("aegis_history");
+    if (saved) {
+      try {
+        return JSON.parse(saved) as ScanHistoryEntry[];
+      } catch {
+        // Ignore corrupt saved history
+      }
+    }
+    return [];
+  });
   const [aiHidden, setAiHidden] = useState(false);
 
   // Detect mode & initialize
   useEffect(() => {
-    const isChromeExt = typeof window !== "undefined" && typeof (window as any).chrome !== "undefined" && typeof chrome.runtime !== "undefined" && typeof chrome.runtime.id !== "undefined";
-    setIsStandalone(!isChromeExt);
+    const isChromeExt = typeof window !== "undefined" && typeof window.chrome !== "undefined" && typeof chrome.runtime !== "undefined" && typeof chrome.runtime.id !== "undefined";
     
     if (isChromeExt) {
       // 1. Get current active tab info
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs: any[]) => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs: ChromeTabInfo[]) => {
         const tab = tabs[0];
         if (tab && tab.url) {
           // Ignore chrome:// internal pages
@@ -132,54 +159,30 @@ export default function App() {
           setCurrentTitle(tab.title || new URL(tab.url).hostname);
           
           // Request status from active content script
-          chrome.tabs.sendMessage(tab.id!, { action: "getPageStatus" }, (response: any) => {
+          chrome.tabs.sendMessage(tab.id!, { action: "getPageStatus" }, (response: MessageResponse) => {
             if (chrome.runtime.lastError) {
               console.log("No content script listener found. (Needs manual scan trigger)");
             } else if (response && response.status === "success") {
-              setScanResults(response.data);
+              setScanResults(response.data as ScanResults);
             }
           });
 
           // Request hidden status from active content script
-          chrome.tabs.sendMessage(tab.id!, { action: "getHideAIStatus" }, (response: any) => {
+          chrome.tabs.sendMessage(tab.id!, { action: "getHideAIStatus" }, (response: MessageResponse) => {
             if (!chrome.runtime.lastError && response && response.status === "success") {
-              setAiHidden(response.isHidden);
+              setAiHidden(response.isHidden ?? false);
             }
           });
         }
       });
 
       // 2. Load settings and history from extension local storage
-      chrome.storage.local.get(["settings", "scanHistory"], (result: any) => {
-        if (result.settings) setSettings(result.settings);
-        if (result.scanHistory) setScanHistory(result.scanHistory);
-      });
-    } else {
-      // Standalone mode: Load settings and history from localStorage
-      const savedSettings = localStorage.getItem("aegis_settings");
-      if (savedSettings) {
-        setSettings(JSON.parse(savedSettings));
-      }
-      
-      const savedHistory = localStorage.getItem("aegis_history");
-      if (savedHistory) {
-        setScanHistory(JSON.parse(savedHistory));
-      }
-      
-      setScanResults({
-        text: [],
-        images: [],
-        videos: [],
-        score: 100,
-        scannedAt: Date.now(),
-        vibecoded: {
-          isVibecoded: false,
-          reasons: [],
-          hasPurpleGradient: false,
-          hasBubbleHeader: false
-        }
+      chrome.storage.local.get(["settings", "scanHistory"], (result: Record<string, unknown>) => {
+        if (result.settings) setSettings(result.settings as AppSettings);
+        if (result.scanHistory) setScanHistory(result.scanHistory as ScanHistoryEntry[]);
       });
     }
+    // Standalone mode: settings and history load lazily from localStorage above; initial scan state is neutral.
   }, []);
 
   // Update Settings
@@ -187,11 +190,10 @@ export default function App() {
     setSettings(newSettings);
     if (!isStandalone) {
       chrome.storage.local.set({ settings: newSettings });
-      // Notify active tab content script of changed HUD settings
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs: any[]) => {
+      // Notify active tab content script of updated settings
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs: ChromeTabInfo[]) => {
         const tab = tabs[0];
         if (tab && tab.id) {
-          chrome.tabs.sendMessage(tab.id, { action: "toggleHUD", enabled: newSettings.showInlineBadges });
           chrome.tabs.sendMessage(tab.id, { action: "updateSettings", settings: newSettings });
         }
       });
@@ -206,7 +208,7 @@ export default function App() {
     setScanning(true);
     
     if (!isStandalone) {
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs: any[]) => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs: ChromeTabInfo[]) => {
         const tab = tabs[0];
         if (tab && tab.id) {
           chrome.tabs.sendMessage(tab.id, { 
@@ -216,13 +218,13 @@ export default function App() {
               images: settings.enableImageScan,
               videos: settings.enableVideoScan
             } 
-          }, (response: any) => {
+          }, (response: MessageResponse) => {
             setScanning(false);
             if (response && response.status === "success") {
-              setScanResults(response.data);
+              setScanResults(response.data as ScanResults);
               // Refresh history
-              chrome.storage.local.get(["scanHistory"], (result: any) => {
-                if (result.scanHistory) setScanHistory(result.scanHistory);
+              chrome.storage.local.get(["scanHistory"], (result: Record<string, unknown>) => {
+                if (result.scanHistory) setScanHistory(result.scanHistory as ScanHistoryEntry[]);
               });
             } else {
               alert("Could not communicate with the page. Try refreshing the webpage.");
@@ -233,7 +235,7 @@ export default function App() {
     } else {
       setTimeout(() => {
         setScanning(false);
-        alert("Please load Aegis as an unpacked Chrome Extension to scan active webpages. For quick tests, use the 'Sandbox' tab!");
+        alert("Please load Detoxify as an unpacked Chrome Extension to scan active webpages. For quick tests, use the 'Sandbox' tab!");
       }, 500);
     }
   };
@@ -244,17 +246,17 @@ export default function App() {
     setScanning(true);
 
     if (!isStandalone) {
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs: any[]) => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs: ChromeTabInfo[]) => {
         const tab = tabs[0];
         if (tab && tab.id) {
           // Close popup window so they see scan? 
           // Better to just let it run. In Chrome, keeping popup open works, or we can send message.
-          chrome.tabs.sendMessage(tab.id, { action: "runDeepScan" }, (response: any) => {
+          chrome.tabs.sendMessage(tab.id, { action: "runDeepScan" }, (response: MessageResponse) => {
             setScanning(false);
             if (response && response.status === "success") {
-              setScanResults(response.data);
-              chrome.storage.local.get(["scanHistory"], (result: any) => {
-                if (result.scanHistory) setScanHistory(result.scanHistory);
+              setScanResults(response.data as ScanResults);
+              chrome.storage.local.get(["scanHistory"], (result: Record<string, unknown>) => {
+                if (result.scanHistory) setScanHistory(result.scanHistory as ScanHistoryEntry[]);
               });
             } else {
               alert("Error executing scan. Make sure the page is fully loaded.");
@@ -265,7 +267,7 @@ export default function App() {
     } else {
       setTimeout(() => {
         setScanning(false);
-        alert("Please load Aegis as an unpacked Chrome Extension to run deep visual scans on web tabs.");
+        alert("Please load Detoxify as an unpacked Chrome Extension to run deep visual scans on web tabs.");
       }, 500);
     }
   };
@@ -273,17 +275,17 @@ export default function App() {
   // Toggle hiding AI generated content
   const handleToggleHideAI = () => {
     if (isStandalone) {
-      alert("Please load Aegis as an unpacked Chrome Extension to toggle content visibility.");
+      alert("Please load Detoxify as an unpacked Chrome Extension to toggle content visibility.");
       setAiHidden(!aiHidden);
       return;
     }
     const nextHidden = !aiHidden;
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs: any[]) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs: ChromeTabInfo[]) => {
       const tab = tabs[0];
       if (tab && tab.id) {
-        chrome.tabs.sendMessage(tab.id, { action: "toggleHideAI", hide: nextHidden }, (response: any) => {
+        chrome.tabs.sendMessage(tab.id, { action: "toggleHideAI", hide: nextHidden }, (response: MessageResponse) => {
           if (response && response.status === "success") {
-            setAiHidden(response.isHidden);
+            setAiHidden(response.isHidden ?? false);
           }
         });
       }
@@ -311,8 +313,8 @@ export default function App() {
             <Shield size={18} color="#070a13" style={{ fill: "#070a13" }} />
           </div>
           <div>
-            <h1 className="logo-text">AEGIS AI</h1>
-            <p style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Content Verifier</p>
+            <h1 className="logo-text">DETOXIFY</h1>
+            <p style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>AI Content Verifier</p>
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -330,7 +332,7 @@ export default function App() {
         <div className="glass" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px', borderLeft: '4px solid var(--primary)' }}>
           <h4 style={{ fontSize: '13px', fontWeight: '700', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Sparkles size={14} color="var(--primary)" />
-            <span>Load Aegis as a Chrome Extension</span>
+            <span>Load Detoxify as a Chrome Extension</span>
           </h4>
           <p style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
             To scan live webpages and use right-clicks or keyboard shortcut tracking, build and load the unpacked extension:

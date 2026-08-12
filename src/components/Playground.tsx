@@ -76,6 +76,34 @@ const humanizerDatabase: Record<string, { term: string; suggestions: string[]; e
   }
 };
 
+interface TextAnalysisStats {
+  length: number;
+  words: number;
+  sentences: number;
+  perplexityScore: number;
+  burstiness: number;
+}
+
+interface HumanizerSuggestion {
+  id: string;
+  term: string;
+  suggestions: string[];
+  explanation: string;
+}
+
+interface TextAnalysisResults {
+  score: number;
+  flags: string[];
+  stats: TextAnalysisStats;
+  suggestions: HumanizerSuggestion[];
+}
+
+interface ImageAnalysisResults {
+  score: number;
+  reasons: string[];
+  url: string;
+}
+
 interface PlaygroundProps {
   settings?: AppSettings;
 }
@@ -85,11 +113,11 @@ export default function Playground({ settings }: PlaygroundProps) {
   
   // Text analysis states
   const [textVal, setTextVal] = useState('');
-  const [textResults, setTextResults] = useState<any>(null);
+  const [textResults, setTextResults] = useState<TextAnalysisResults | null>(null);
   
   // Image analysis states
   const [imgUrl, setImgUrl] = useState('');
-  const [imgResults, setImgResults] = useState<any>(null);
+  const [imgResults, setImgResults] = useState<ImageAnalysisResults | null>(null);
   
   const [analyzing, setAnalyzing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -129,7 +157,7 @@ export default function Playground({ settings }: PlaygroundProps) {
       ];
 
       let emojiScore = 0;
-      let matchedEmojis = [];
+      const matchedEmojis = [];
       corporateEmojis.forEach(emoji => {
         const regex = new RegExp(emoji.char, "g");
         const count = (text.match(regex) || []).length;
@@ -365,7 +393,7 @@ export default function Playground({ settings }: PlaygroundProps) {
       }
 
       // 11. Humanizer Suggestions Scan
-      const suggestionsList: any[] = [];
+      const suggestionsList: HumanizerSuggestion[] = [];
       const lowerText = text.toLowerCase();
       
       for (const key in humanizerDatabase) {
@@ -448,12 +476,12 @@ export default function Playground({ settings }: PlaygroundProps) {
   };
 
   const handleApplySuggestion = (term: string, replacement: string) => {
-    let nextText = textVal;
+    let nextText: string;
     if (term === "Single-sentence spacing") {
       const paragraphs = textVal.split(/\n\s*\n/).map(p => p.trim()).filter(p => p.length > 0);
       nextText = paragraphs.join(" ");
     } else {
-      const escaped = term.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const escaped = term.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
       const regex = new RegExp(`\\b${escaped}\\b`, 'gi');
       
       nextText = textVal.replace(regex, (match) => {
@@ -473,20 +501,18 @@ export default function Playground({ settings }: PlaygroundProps) {
     const targetUrl = overrideUrl || imgUrl;
     if (!targetUrl) return;
     setAnalyzing(true);
-    setImgResults(null);
-
-    const activeSettings = settings || {
-      enableTextScan: true,
-      enableImageScan: true,
-      enableVideoScan: true,
-      sensitivity: 50,
-      showInlineBadges: true,
-      autoImageOverlays: false,
-      showVibecodedAlert: false,
-      apiMode: "cloud",
-      apiUrl: "http://localhost:5001/predict",
-      apiKey: ""
-    };
+    setImgResults(null);      const activeSettings = settings || {
+        enableTextScan: true,
+        enableImageScan: true,
+        enableVideoScan: true,
+        sensitivity: 50,
+        showInlineBadges: true,
+        autoImageOverlays: false,
+        showVibecodedAlert: false,
+        apiMode: "local",
+        apiUrl: "",
+        apiKey: ""
+      };
 
     if (activeSettings.apiMode === 'cloud') {
       const apiEndpoint = activeSettings.apiUrl || 'http://localhost:5001/predict';
@@ -534,7 +560,7 @@ export default function Playground({ settings }: PlaygroundProps) {
     // Try real fetch on local client side, if CORS blocks or fails, simulate metadata audit
     setTimeout(async () => {
       let isAi = false;
-      let reasons = [];
+      const reasons = [];
       let score = 12;
       
       const lower = targetUrl.toLowerCase();
@@ -556,29 +582,10 @@ export default function Playground({ settings }: PlaygroundProps) {
         isAiHost = true;
       }
       
-      // Specific user-requested Twitter/LinkedIn media IDs
-      const twitterTestIds = ["hjziwyfb0aam3e2", "hjrbsvdacaees17s", "2060778085499408560", "itsmevalluvan", "d4vy2h6utdoe4pe"];
-      let matchedTestId = null;
-      for (const tid of twitterTestIds) {
-        if (lower.includes(tid)) {
-          matchedTestId = tid;
-          break;
-        }
-      }
-
-      if (matchedTestId) {
-        isAi = true;
-        score = 99;
-        reasons.push(`Social media signature match for verified generative AI asset ID: '${matchedTestId}'`);
-      } else if (isAiHost) {
+      if (isAiHost) {
         isAi = true;
         score = 92;
         reasons.push("Image source URL matches known AI generative engine/portal directory.");
-      } else if (targetUrl.includes("unsplash.com") && Math.random() > 0.6) {
-        isAi = true;
-        score = 85;
-        reasons.push("Structural noise matching Midjourney V6 grain metrics");
-        reasons.push("Asymmetric blur contours discovered in background layer");
       }
 
       // Midjourney and generic generator filename signature check
@@ -615,17 +622,138 @@ export default function Playground({ settings }: PlaygroundProps) {
             score = Math.max(score, 95);
             reasons.push("Base64 EXIF signature match: PNG metadata contains Stable Diffusion parameters chunk");
           }
-        } catch (e) {}
+        } catch { /* ignore malformed base64 payloads */ }
       } else {
         // Simulated fetch to mimic EXIF checker
         try {
           const res = await fetch(targetUrl, { headers: { 'Range': 'bytes=0-10000' } });
           if (res.ok) {
-            reasons.push("EXIF Audit: Successfully parsed JFIF/EXIF chunks.");
-            reasons.push("Compressive ratio: 82% (standard format)");
+            reasons.push("Local audit: Fetched image header bytes. Switch to Cloud Detector mode for full model analysis.");
           }
-        } catch (e) {
-          reasons.push("EXIF Audit: Remote file blocked CORS reads. Executed visual model parser.");
+        } catch {
+          reasons.push("Local audit: Remote file blocked CORS reads. Switch to Cloud Detector mode for full model analysis.");
+        }
+      }
+
+      // Flat cel-shaded render signature (works for data: URIs uploaded locally)
+      if (targetUrl.startsWith('data:') && !isAi) {
+        try {
+          const probe = new Image();
+          probe.src = targetUrl;
+          await new Promise<void>((resolve, reject) => {
+            probe.onload = () => resolve();
+            probe.onerror = () => reject(new Error('image load failed'));
+          });
+          const size = 128;
+          const canvas = document.createElement('canvas');
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          if (ctx) {
+            ctx.drawImage(probe, 0, 0, size, size);
+            const px = ctx.getImageData(0, 0, size, size).data;
+            const buckets = new Set<number>();
+            let satSum = 0;
+            for (let i = 0; i < px.length; i += 4) {
+              const r = px[i], g = px[i + 1], b = px[i + 2];
+              buckets.add(((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4));
+              const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+              satSum += mx > 0 ? (mx - mn) / mx : 0;
+            }
+            const satMean = satSum / (px.length / 4);
+            if (buckets.size < 700 && satMean > 0.6) {
+              isAi = true;
+              score = Math.max(score, 70);
+              reasons.push(`Flat synthetic palette signature: ${buckets.size} distinct colors, ${Math.round(satMean * 100)}% saturation (cel-shaded render art)`);
+            }
+
+            // Document-render signature (AI-generated receipts/documents):
+            // smooth texture-free background + soft anti-aliased type.
+            // Same gate + signal thresholds as server.py / background.js -
+            // keep the edge/border math in all three files in sync.
+            const lumaArr = new Float32Array(size * size);
+            for (let i = 0, idx = 0; i < px.length; i += 4, idx++) {
+              lumaArr[idx] = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+            }
+            const grad = new Float32Array(size * size);
+            for (let y = 1; y < size; y++) {
+              for (let x = 1; x < size; x++) {
+                const idx = y * size + x;
+                grad[idx] = Math.abs(lumaArr[idx] - lumaArr[idx - size]) + Math.abs(lumaArr[idx] - lumaArr[idx - 1]);
+              }
+            }
+            let strong = 0;
+            let medium = 0;
+            let edgePix = 0;
+            for (let i = 0; i < size * size; i++) {
+              if (grad[i] > 120) strong++;
+              else if (grad[i] > 40) medium++;
+              if (grad[i] > 60) edgePix++;
+            }
+            const edgeDensity = edgePix / (size * size);
+            const edgeRatio = strong / Math.max(medium, 1);
+            let flatP = 0;
+            let patches = 0;
+            for (let y = 0; y + 8 <= size; y += 8) {
+              for (let x = 0; x + 8 <= size; x += 8) {
+                patches++;
+                let sum = 0;
+                let sum2 = 0;
+                for (let yy = y; yy < y + 8; yy++) {
+                  for (let xx = x; xx < x + 8; xx++) {
+                    const v = lumaArr[yy * size + xx];
+                    sum += v;
+                    sum2 += v * v;
+                  }
+                }
+                const mean = sum / 64;
+                if (sum2 / 64 - mean * mean < 9) flatP++;
+              }
+            }
+            const flatRatio = patches > 0 ? flatP / patches : 0;
+            const bw = Math.max(2, Math.floor(size / 20));
+            const bh = Math.max(2, Math.floor(size / 20));
+            let bSum = 0;
+            let bSum2 = 0;
+            let bCount = 0;
+            for (let x = 0; x < size; x++) {
+              for (let y = 0; y < bh; y++) {
+                const v = lumaArr[y * size + x];
+                bSum += v;
+                bSum2 += v * v;
+                bCount++;
+              }
+              for (let y = size - bh; y < size; y++) {
+                const v = lumaArr[y * size + x];
+                bSum += v;
+                bSum2 += v * v;
+                bCount++;
+              }
+            }
+            for (let y = bh; y < size - bh; y++) {
+              for (let x = 0; x < bw; x++) {
+                const v = lumaArr[y * size + x];
+                bSum += v;
+                bSum2 += v * v;
+                bCount++;
+              }
+              for (let x = size - bw; x < size; x++) {
+                const v = lumaArr[y * size + x];
+                bSum += v;
+                bSum2 += v * v;
+                bCount++;
+              }
+            }
+            const bMean = bSum / bCount;
+            const borderStd = Math.sqrt(Math.max(0, bSum2 / bCount - bMean * bMean));
+            if (edgeDensity > 0.06 && flatRatio < 0.35 && borderStd < 20.0 && edgeRatio < 1.1) {
+              isAi = true;
+              score = Math.max(score, 75);
+              reasons.push(`Synthetic document render signature: unnaturally smooth background (border variance ${borderStd.toFixed(1)}) and soft anti-aliased type (edge ratio ${edgeRatio.toFixed(2)}) - typical of AI-generated receipts/documents`);
+            }
+          }
+        } catch {
+          // Tainted or unreadable pixels - skip
         }
       }
 
@@ -776,7 +904,7 @@ export default function Playground({ settings }: PlaygroundProps) {
                   </p>
                   
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '4px' }}>
-                    {textResults.suggestions.map((item: any, idx: number) => (
+                    {textResults.suggestions.map((item: HumanizerSuggestion, idx: number) => (
                       <div key={idx} style={{ padding: '10px', background: '#ffffff', borderRadius: '8px', border: '1px solid #d1fae5', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <span style={{ fontSize: '11.5px', fontWeight: '700', color: '#111827' }}>

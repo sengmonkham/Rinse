@@ -47,8 +47,8 @@ export default function Settings({ settings, onSave }: SettingsProps) {
     setInlineBadges(true);
     setAutoImageOverlays(false);
     setShowVibecodedAlert(false);
-    setApiMode('cloud');
-    setApiUrl('http://localhost:5001/predict');
+    setApiMode('local');
+    setApiUrl('');
     setApiKey('');
   };
 
@@ -220,7 +220,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
               <input
                 type="text"
                 className="input-text"
-                placeholder="https://api.aegis-detector.ai/v1"
+                placeholder="https://api.detoxify.app/v1"
                 value={apiUrl}
                 onChange={(e) => setApiUrl(e.target.value)}
                 style={{ fontSize: '11.5px' }}

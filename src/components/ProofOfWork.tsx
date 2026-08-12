@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Download, Keyboard, ShieldAlert, ShieldCheck, HelpCircle, Activity, ClipboardCheck } from 'lucide-react';
 
 interface PasteEventRecord {
@@ -14,6 +14,25 @@ interface ActivityInterval {
   pastes: number;
 }
 
+// Unicode-safe checksum via the Web Crypto API (falls back to a simple hash in non-secure contexts)
+const sha256Hex = async (input: string): Promise<string> => {
+  try {
+    const data = new TextEncoder().encode(input);
+    const digest = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(digest))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+  } catch {
+    // Fallback (e.g. file:// preview): FNV-1a checksum so export never crashes
+    let h = 0x811c9dc5;
+    for (let i = 0; i < input.length; i++) {
+      h ^= input.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0).toString(16).padStart(64, '0').substring(0, 64);
+  }
+};
+
 export default function ProofOfWork() {
   const [editorText, setEditorText] = useState('');
   const [keystrokes, setKeystrokes] = useState(0);
@@ -21,7 +40,6 @@ export default function ProofOfWork() {
   const [pasteCount, setPasteCount] = useState(0);
   const [pasteLength, setPasteLength] = useState(0);
   const [activeSeconds, setActiveSeconds] = useState(0);
-  const [integrityScore, setIntegrityScore] = useState(100);
   const [pasteRecords, setPasteRecords] = useState<PasteEventRecord[]>([]);
   const [chartData, setChartData] = useState<ActivityInterval[]>([]);
   
@@ -62,12 +80,11 @@ export default function ProofOfWork() {
     return () => clearInterval(timer);
   }, []);
 
-  // Recalculate Integrity Score based on metrics
-  useEffect(() => {
+  // Recalculate Integrity Score based on metrics (pure derivation, no effect needed)
+  const integrityScore = useMemo(() => {
     const totalLen = editorText.length;
     if (totalLen === 0) {
-      setIntegrityScore(100);
-      return;
+      return 100;
     }
 
     let score = 100;
@@ -94,8 +111,7 @@ export default function ProofOfWork() {
       score -= 15;
     }
 
-    const finalScore = Math.max(5, Math.min(100, score));
-    setIntegrityScore(finalScore);
+    return Math.max(5, Math.min(100, score));
   }, [editorText, keystrokes, pasteLength]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -150,17 +166,17 @@ export default function ProofOfWork() {
     intervalPastesRef.current = 0;
   };
 
-  // Export proof report as signed JSON file
-  const handleExportCertificate = () => {
-    const certificateId = `AEGIS-POW-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+  // Export proof report as a JSON activity log with a checksum (not a cryptographic signature)
+  const handleExportCertificate = async () => {
+    const certificateId = `DETOXIFY-POW-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
     const reportData = {
       certificateId: certificateId,
       exportedAt: new Date().toISOString(),
-      documentTitle: `Aegis Proof-of-Work Report`,
+      documentTitle: `Detoxify Proof-of-Work Report`,
       textSummary: {
         totalCharacters: editorText.length,
         totalWords: editorText.split(/\s+/).filter(w => w.length > 0).length,
-        documentHash: btoa(editorText.substring(0, 100) + editorText.length).substring(0, 16)
+        documentHash: await sha256Hex(editorText)
       },
       metrics: {
         humanIntegrityIndex: `${integrityScore}%`,
@@ -177,7 +193,10 @@ export default function ProofOfWork() {
         length: r.length,
         contentExcerpt: r.snippet
       })),
-      verificationSeal: `AEGIS_SEAL_HASH_${btoa(`${certificateId}-${integrityScore}-${keystrokes}`).substring(0, 24)}`
+      verification: {
+        hash: await sha256Hex(`${certificateId}-${integrityScore}-${keystrokes}-${editorText.length}`),
+        note: "Checksum of the report fields for tamper-evidence. This is not a cryptographic signature."
+      }
     };
 
     const jsonStr = JSON.stringify(reportData, null, 2);
@@ -185,7 +204,7 @@ export default function ProofOfWork() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `aegis-pow-certificate-${certificateId.toLowerCase()}.json`;
+    link.download = `detoxify-pow-certificate-${certificateId.toLowerCase()}.json`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -232,7 +251,7 @@ export default function ProofOfWork() {
 
           <textarea
             className="input-textarea"
-            placeholder="Type your article here directly... Aegis will track your typing cadence, deletions, and copy-paste chunks to verify human authorship and generate an authenticity report."
+            placeholder="Type your article here directly... Detoxify will track your typing cadence, deletions, and copy-paste chunks to verify human authorship and generate an authenticity report."
             value={editorText}
             onChange={(e) => setEditorText(e.target.value)}
             onKeyDown={handleKeyDown}

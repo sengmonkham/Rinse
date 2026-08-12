@@ -26,7 +26,12 @@ export default function DetectorDashboard({ scanResults, scanning, onScanQuick, 
     return { label: "Synthetic / AI Heavy", color: "var(--danger)", bg: "var(--danger-glow)", desc: "High density of generative AI writing, automated content, or synthetic visual assets." };
   };
 
-  const status = getIntegrityStatus(score);
+  // Before any scan has run, show a neutral state instead of a misleading 100%
+  const hasScanned = scanResults.scannedAt != null;
+  const status = hasScanned
+    ? getIntegrityStatus(score)
+    : { label: 'Awaiting Scan', color: 'var(--text-muted)', bg: 'transparent', desc: 'Trigger a scan to evaluate this page authenticity.' };
+  const displayOffset = hasScanned ? strokeDashoffset : circumference;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', flex: '1' }}>
@@ -80,7 +85,7 @@ export default function DetectorDashboard({ scanResults, scanning, onScanQuick, 
               r={radius}
               stroke={status.color}
               strokeDasharray={circumference}
-              strokeDashoffset={strokeDashoffset}
+              strokeDashoffset={displayOffset}
               style={{
                 filter: `drop-shadow(0 0 6px ${status.color})`
               }}
@@ -88,7 +93,7 @@ export default function DetectorDashboard({ scanResults, scanning, onScanQuick, 
           </svg>
           <div className="gauge-label">
             <span className="gauge-value" style={{ color: status.color }}>
-              {scanning ? '...' : `${score}%`}
+              {scanning ? '...' : hasScanned ? `${score}%` : '--'}
             </span>
             <span className="gauge-desc">Integrity</span>
           </div>
@@ -104,7 +109,7 @@ export default function DetectorDashboard({ scanResults, scanning, onScanQuick, 
               fontWeight: '700',
               color: status.color,
               background: status.bg,
-              border: `1px solid ${status.color}33`,
+              border: hasScanned ? `1px solid ${status.color}33` : '1px solid var(--border-color)',
               marginBottom: '8px'
             }}
           >
@@ -204,7 +209,7 @@ export default function DetectorDashboard({ scanResults, scanning, onScanQuick, 
       {/* Quick guide */}
       <div style={{ display: 'flex', gap: '8px', padding: '0 4px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: '1.4' }}>
         <HelpCircle size={14} style={{ flexShrink: 0 }} />
-        <span>Aegis injects overlays onto suspected blocks in real-time. Hover/click tags directly on the webpage to inspect EXIF markers or text heuristics.</span>
+        <span>Detoxify injects overlays onto suspected blocks in real-time. Hover/click tags directly on the webpage to inspect EXIF markers or text heuristics.</span>
       </div>
 
     </div>

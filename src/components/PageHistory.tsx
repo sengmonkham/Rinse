@@ -1,13 +1,20 @@
+import { useEffect, useState } from 'react';
 import { History, Trash2, ExternalLink, Calendar } from 'lucide-react';
 
 interface PageHistoryProps {
-  history: any[];
+  history: ScanHistoryEntry[];
   onClear: () => void;
   onSelectUrl: (url: string) => void;
 }
 
 export default function PageHistory({ history, onClear, onSelectUrl }: PageHistoryProps) {
-  
+  // Track "now" so relative times stay fresh without calling Date.now() during render
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(timer);
+  }, []);
+
   // Calculate statistics
   const totalScans = history.length;
   const avgScore = totalScans > 0 
@@ -20,8 +27,8 @@ export default function PageHistory({ history, onClear, onSelectUrl }: PageHisto
     return 'var(--danger)';
   };
 
-  const getRelativeTime = (timestamp: number) => {
-    const diff = Date.now() - timestamp;
+  const getRelativeTime = (timestamp: number, current: number) => {
+    const diff = current - timestamp;
     const mins = Math.floor(diff / 60000);
     const hours = Math.floor(mins / 60);
     const days = Math.floor(hours / 24);
@@ -104,7 +111,7 @@ export default function PageHistory({ history, onClear, onSelectUrl }: PageHisto
                 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <Calendar size={10} />
-                  <span>{getRelativeTime(item.timestamp)}</span>
+                  <span>{getRelativeTime(item.timestamp, now)}</span>
                   <ExternalLink size={10} style={{ marginLeft: '4px' }} />
                 </div>
               </div>

@@ -1,4 +1,4 @@
-// Aegis AI - Content Script for Webpage DOM Injection
+// Detoxify - Content Script for Webpage DOM Injection
 
 // Global state for scanning
 let scanResults = {
@@ -16,10 +16,12 @@ let scanResults = {
 };
 
 let scanInProgress = false;
-let hudElement = null;
 let sideDrawerElement = null;
 let laserScannerElement = null;
 let floatingTooltipElement = null;
+
+// Sensitivity from settings (10-90), used to tune the text flagging threshold
+let scanSensitivity = 50;
 
 // Hover-Hotkey variables
 let hoveredElement = null;
@@ -33,7 +35,7 @@ const injectStyles = () => {
   const style = document.createElement("style");
   style.id = "aegis-styles";
   style.textContent = `
-    /* Aegis Badge Styling */
+    /* Detoxify Badge Styling */
     .aegis-badge {
       display: inline-flex;
       align-items: center;
@@ -748,7 +750,9 @@ const analyzeTextHeuristics = (text) => {
   // Cap score at 99
   const finalScore = Math.min(score, 99);
 
-  if (finalScore >= 20) {
+  // Sensitivity-driven flag threshold: higher sensitivity flags more aggressively
+  const flagThreshold = Math.max(5, Math.min(30, 32 - scanSensitivity * 0.25));
+  if (finalScore >= flagThreshold) {
     return {
       score: finalScore,
       reasons: reasons,
@@ -887,21 +891,6 @@ const inspectImageDOMContext = (img) => {
     } catch (e) {}
   } else {
     const lowerSrc = src.toLowerCase();
-    
-    // Specific user-requested Twitter/LinkedIn media IDs
-    const twitterTestIds = ["hjziwyfb0aam3e2", "hjrbsvdacaees17s", "2060778085499408560", "itsmevalluvan", "d4vy2h6utdoe4pe"];
-    let matchedTestId = null;
-    for (const tid of twitterTestIds) {
-      if (lowerSrc.includes(tid) || window.location.href.toLowerCase().includes(tid)) {
-        matchedTestId = tid;
-        break;
-      }
-    }
-
-    if (matchedTestId) {
-      score = Math.max(score, 99);
-      reasons.push(`Social media signature match for verified generative AI asset ID: '${matchedTestId}'`);
-    }
 
     // Social media post context checker (e.g. Twitter/X articles, Reddit posts, LinkedIn updates)
     const postContainer = img.closest('article, [class*="post"], [class*="tweet"], [id*="post"], [id*="tweet"], [data-testid="post-container"], [class*="feed-shared-update"], [data-view-name*="feed-item"], [class*="update-v2"]');
@@ -1155,7 +1144,8 @@ const detectPurpleGradient = () => {
 };
 
 const detectBubbleHeader = () => {
-  const elements = document.querySelectorAll('a, span, div, p');
+  // Bound the DOM walk: pages with thousands of nodes shouldn't thrash layout.
+  const elements = Array.from(document.querySelectorAll('a, span, div, p')).slice(0, 800);
   const h1El = document.querySelector('h1');
   const h1Top = h1El ? h1El.getBoundingClientRect().top + window.scrollY : 99999;
 
@@ -1211,7 +1201,7 @@ const detectBubbleHeader = () => {
         /^(new|introducing|announcing|launching|just released|read our|join|latest|v\d+|beta|check out|whats new|update|hid)/i.test(text) ||
         /introducing|announcing|whats new/i.test(text) ||
         /[\u{1F300}-\u{1F9FF}\u{2700}-\u{27BF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{2600}-\u{26FF}]/u.test(text) ||
-        text.includes('✨') || text.includes('🚀') || text.includes('🎉') || text.includes('📢') || text.includes('→') || text.includes('→') || text.includes('⚡') ||
+        text.includes('✨') || text.includes('🚀') || text.includes('🎉') || text.includes('📢') || text.includes('→') || text.includes('⚡') ||
         el.closest('[class*="hero"]') ||
         (top < h1Top);
 
@@ -1265,6 +1255,7 @@ const showVibecodedNotification = () => {
   document.getElementById("aegis-vibecoded-close-btn").addEventListener("click", () => {
     topBar.classList.remove("show");
     document.body.style.marginTop = "0px";
+    document.body.style.transition = "";
     setTimeout(() => topBar.remove(), 400);
   });
 };
@@ -1297,12 +1288,16 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
       resolve(null);
     }
   });
+  if (settingsResult && typeof settingsResult.sensitivity === "number") {
+    scanSensitivity = settingsResult.sensitivity;
+  }
   const showVibe = (settingsResult && settingsResult.showVibecodedAlert !== undefined) ? settingsResult.showVibecodedAlert : false;
 
   const existingVibeBar = document.getElementById("aegis-vibecoded-top-bar");
   if (existingVibeBar && (!isVibecoded || !showVibe)) {
     existingVibeBar.remove();
     document.body.style.marginTop = "0px";
+    document.body.style.transition = "";
   }
 
   if (isVibecoded && showVibe) {
@@ -1379,7 +1374,7 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
 
         const badge = document.createElement("span");
         badge.className = `aegis-badge ${result.score >= 60 ? "aegis-badge-ai" : "aegis-badge-suspected"}`;
-        badge.innerHTML = `AI ${result.score}%`;
+        badge.textContent = `AI ${result.score}%`;
         badge.addEventListener("click", (e) => {
           e.stopPropagation();
           openDiagnosticDrawer(item, "text");
@@ -1429,7 +1424,7 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
         if (parent && !parent.classList.contains("aegis-media-container")) {
           const badge = document.createElement("span");
           badge.className = `aegis-badge ${imgResult.score >= 60 ? "aegis-badge-ai" : "aegis-badge-suspected"} aegis-media-overlay-badge`;
-          badge.innerHTML = `AI IMAGE ${imgResult.score}%`;
+          badge.textContent = `AI IMAGE ${imgResult.score}%`;
           badge.addEventListener("click", (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -1499,7 +1494,7 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
         if (parent) {
           const badge = document.createElement("span");
           badge.className = `aegis-badge aegis-badge-ai aegis-media-overlay-badge`;
-          badge.innerHTML = `AI VIDEO 98%`;
+          badge.textContent = `AI VIDEO 98%`;
           badge.addEventListener("click", (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -1561,7 +1556,7 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
   return scanResults;
 };
 
-// Open diagnostic drawer
+// Open diagnostic drawer (builds DOM safely; page-derived strings are never parsed as HTML)
 const openDiagnosticDrawer = (item, type) => {
   injectStyles();
 
@@ -1574,63 +1569,115 @@ const openDiagnosticDrawer = (item, type) => {
   const riskClass = item.score >= 60 ? "aegis-risk-red" : "aegis-risk-yellow";
   const label = type.toUpperCase() + " CONTENT DIAGNOSTICS";
 
-  let mediaPreviewHtml = "";
-  if (type === "image") {
-    mediaPreviewHtml = `
-      <div style="margin-top: 15px; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); display: flex; justify-content: center; align-items: center; max-height: 180px;">
-        <img src="${item.src}" style="max-width: 100%; max-height: 180px; object-fit: contain;" />
-      </div>
-    `;
+  sideDrawerElement.textContent = "";
+
+  // Header
+  const header = document.createElement("div");
+  header.className = "aegis-drawer-header";
+  const title = document.createElement("div");
+  title.className = "aegis-drawer-title";
+  const shield = document.createElement("span");
+  shield.style.color = item.score >= 60 ? "#EF4444" : "#F59E0B";
+  shield.textContent = "🛡️";
+  const titleText = document.createElement("span");
+  titleText.textContent = "Detoxify Inspector";
+  title.appendChild(shield);
+  title.appendChild(titleText);
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "aegis-drawer-close";
+  closeBtn.id = "aegis-drawer-close-btn";
+  closeBtn.textContent = "×";
+  closeBtn.setAttribute("aria-label", "Close inspector");
+  header.appendChild(title);
+  header.appendChild(closeBtn);
+
+  const content = document.createElement("div");
+  content.className = "aegis-drawer-content";
+
+  const logTitle = document.createElement("div");
+  logTitle.className = "aegis-log-title";
+  logTitle.textContent = label;
+  content.appendChild(logTitle);
+
+  // Risk meter
+  const riskCard = document.createElement("div");
+  riskCard.className = "aegis-card aegis-risk-meter";
+  const metricRow = document.createElement("div");
+  metricRow.className = "aegis-metric-row";
+  const metricLabel = document.createElement("span");
+  metricLabel.className = "aegis-metric-label";
+  metricLabel.textContent = "AI Generation Likelihood";
+  const metricValue = document.createElement("span");
+  metricValue.className = "aegis-metric-value";
+  metricValue.style.color = item.score >= 60 ? "#F87171" : "#FBBF24";
+  metricValue.textContent = `${item.score}%`;
+  metricRow.appendChild(metricLabel);
+  metricRow.appendChild(metricValue);
+  const barContainer = document.createElement("div");
+  barContainer.className = "aegis-risk-bar-container";
+  const bar = document.createElement("div");
+  bar.className = `aegis-risk-bar ${riskClass}`;
+  bar.style.width = "0%";
+  barContainer.appendChild(bar);
+  riskCard.appendChild(metricRow);
+  riskCard.appendChild(barContainer);
+  content.appendChild(riskCard);
+
+  // Diagnostics list
+  const diagCard = document.createElement("div");
+  diagCard.className = "aegis-card";
+  const diagTitle = document.createElement("div");
+  diagTitle.className = "aegis-log-title";
+  diagTitle.textContent = "Detection Diagnostics";
+  const ul = document.createElement("ul");
+  ul.style.cssText = "padding-left: 20px; margin: 0; font-size: 13px; line-height: 1.6; color: #CBD5E1;";
+  (item.reasons || []).forEach(r => {
+    const li = document.createElement("li");
+    li.textContent = r;
+    ul.appendChild(li);
+  });
+  diagCard.appendChild(diagTitle);
+  diagCard.appendChild(ul);
+  content.appendChild(diagCard);
+
+  if (type === "text") {
+    const snippetCard = document.createElement("div");
+    snippetCard.className = "aegis-card";
+    const snippetTitle = document.createElement("div");
+    snippetTitle.className = "aegis-log-title";
+    snippetTitle.textContent = "Flagged Content Segment";
+    const snippet = document.createElement("div");
+    snippet.className = "aegis-snippet";
+    snippet.textContent = `"${item.snippet || ""}"`;
+    snippetCard.appendChild(snippetTitle);
+    snippetCard.appendChild(snippet);
+    content.appendChild(snippetCard);
+  } else if (type === "image") {
+    const previewWrap = document.createElement("div");
+    previewWrap.style.cssText = "margin-top: 15px; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.3); display: flex; justify-content: center; align-items: center; max-height: 180px;";
+    const img = document.createElement("img");
+    img.src = item.src || "";
+    img.alt = "Scanned image preview";
+    img.style.cssText = "max-width: 100%; max-height: 180px; object-fit: contain;";
+    previewWrap.appendChild(img);
+    content.appendChild(previewWrap);
   }
 
-  sideDrawerElement.innerHTML = `
-    <div class="aegis-drawer-header">
-      <div class="aegis-drawer-title">
-        <span style="color: ${item.score >= 60 ? '#EF4444' : '#F59E0B'}">🛡️</span>
-        <span>Aegis Inspector</span>
-      </div>
-      <button class="aegis-drawer-close" id="aegis-drawer-close-btn">&times;</button>
-    </div>
-    <div class="aegis-drawer-content">
-      <div class="aegis-log-title">${label}</div>
-      <div class="aegis-card aegis-risk-meter">
-        <div class="aegis-metric-row">
-          <span class="aegis-metric-label">AI Generation Likelihood</span>
-          <span class="aegis-metric-value" style="color: ${item.score >= 60 ? '#F87171' : '#FBBF24'}">${item.score}%</span>
-        </div>
-        <div class="aegis-risk-bar-container">
-          <div class="aegis-risk-bar ${riskClass}" style="width: 0%"></div>
-        </div>
-      </div>
-      
-      <div class="aegis-card">
-        <div class="aegis-log-title">Detection Diagnostics</div>
-        <ul style="padding-left: 20px; margin: 0; font-size: 13px; line-height: 1.6; color: #CBD5E1;">
-          ${item.reasons.map(r => `<li>${r}</li>`).join("")}
-        </ul>
-      </div>
-
-      ${type === "text" ? `
-        <div class="aegis-card">
-          <div class="aegis-log-title">Flagged Content Segment</div>
-          <div class="aegis-snippet">"${item.snippet}"</div>
-        </div>
-      ` : mediaPreviewHtml}
-    </div>
-  `;
+  sideDrawerElement.appendChild(header);
+  sideDrawerElement.appendChild(content);
 
   setTimeout(() => {
     sideDrawerElement.classList.add("open");
-    const bar = sideDrawerElement.querySelector(".aegis-risk-bar");
-    if (bar) bar.style.width = `${item.score}%`;
+    const barEl = sideDrawerElement.querySelector(".aegis-risk-bar");
+    if (barEl) barEl.style.width = `${item.score}%`;
   }, 50);
 
-  document.getElementById("aegis-drawer-close-btn").addEventListener("click", () => {
+  closeBtn.addEventListener("click", () => {
     sideDrawerElement.classList.remove("open");
   });
 };
 
-// Create floating scanner tooltip
+// Create floating scanner tooltip (app-controlled text; built with DOM APIs for consistency)
 const showFloatingScannerTooltip = (textStr, x, y) => {
   injectStyles();
   removeFloatingTooltip();
@@ -1639,18 +1686,23 @@ const showFloatingScannerTooltip = (textStr, x, y) => {
   floatingTooltipElement.className = "aegis-floating-tooltip";
   floatingTooltipElement.style.left = `${x + 10}px`;
   floatingTooltipElement.style.top = `${y + 10}px`;
-  floatingTooltipElement.innerHTML = `
-    <div style="display:flex; align-items:center; gap:8px;">
-      <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#06b6d4; animation:pulse 1s infinite alternate;"></span>
-      <span style="font-size:11px; font-weight:700; color:#06b6d4; text-transform:uppercase;">${textStr}</span>
-    </div>
-  `;
+
+  const inner = document.createElement("div");
+  inner.style.cssText = "display:flex; align-items:center; gap:8px;";
+  const dot = document.createElement("span");
+  dot.style.cssText = "display:inline-block; width:8px; height:8px; border-radius:50%; background:#06b6d4; animation:pulse 1s infinite alternate;";
+  const label = document.createElement("span");
+  label.style.cssText = "font-size:11px; font-weight:700; color:#06b6d4; text-transform:uppercase;";
+  label.textContent = textStr;
+  inner.appendChild(dot);
+  inner.appendChild(label);
+  floatingTooltipElement.appendChild(inner);
 
   document.body.appendChild(floatingTooltipElement);
   setTimeout(() => floatingTooltipElement.classList.add("show"), 50);
 };
 
-// Create diagnostic floating tooltip
+// Create diagnostic floating tooltip (builds DOM safely; page-derived strings are never parsed as HTML)
 const showDiagnosticFloatingTooltip = (data, x, y) => {
   injectStyles();
   removeFloatingTooltip();
@@ -1662,32 +1714,58 @@ const showDiagnosticFloatingTooltip = (data, x, y) => {
 
   const color = data.score >= 50 ? "#F87171" : "#34D399";
 
-  floatingTooltipElement.innerHTML = `
-    <div class="aegis-tooltip-header">
-      <span style="font-size:10px; font-weight:800; color:#64748B;">${data.title}</span>
-      <span style="font-size:12px; font-weight:800; color:${color};">AI: ${data.score}%</span>
-    </div>
-    <div style="font-size:9.5px; color:#94A3B8; margin-bottom:8px; font-style:italic;">${data.details}</div>
-    <div style="max-height:100px; overflow-y:auto; padding-right:4px;">
-      ${data.reasons.map(r => `
-        <div style="display:flex; align-items:flex-start; gap:4px; font-size:10px; line-height:1.3; color:#CBD5E1; margin-bottom:4px;">
-          <span style="color:${color};">•</span>
-          <span>${r}</span>
-        </div>
-      `).join("")}
-    </div>
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; border-top:1px solid rgba(255,255,255,0.05); padding-top:6px;">
-      <span style="font-size:8px; color:#64748B;">AEGIS ON-DEMAND</span>
-      <button id="aegis-tooltip-close-btn" style="background:none; border:none; color:#94A3B8; font-size:9px; cursor:pointer; font-weight:700;">Close</button>
-    </div>
-  `;
+  // Header
+  const header = document.createElement("div");
+  header.className = "aegis-tooltip-header";
+  const title = document.createElement("span");
+  title.style.cssText = "font-size:10px; font-weight:800; color:#64748B;";
+  title.textContent = data.title || "";
+  const score = document.createElement("span");
+  score.style.cssText = `font-size:12px; font-weight:800; color:${color};`;
+  score.textContent = `AI: ${data.score}%`;
+  header.appendChild(title);
+  header.appendChild(score);
+
+  const details = document.createElement("div");
+  details.style.cssText = "font-size:9.5px; color:#94A3B8; margin-bottom:8px; font-style:italic;";
+  details.textContent = data.details || "";
+
+  const list = document.createElement("div");
+  list.style.cssText = "max-height:100px; overflow-y:auto; padding-right:4px;";
+  (data.reasons || []).forEach(r => {
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex; align-items:flex-start; gap:4px; font-size:10px; line-height:1.3; color:#CBD5E1; margin-bottom:4px;";
+    const dot = document.createElement("span");
+    dot.style.color = color;
+    dot.textContent = "•";
+    const text = document.createElement("span");
+    text.textContent = r;
+    row.appendChild(dot);
+    row.appendChild(text);
+    list.appendChild(row);
+  });
+
+  const footer = document.createElement("div");
+  footer.style.cssText = "display:flex; justify-content:space-between; align-items:center; margin-top:8px; border-top:1px solid rgba(255,255,255,0.05); padding-top:6px;";
+  const brand = document.createElement("span");
+  brand.style.cssText = "font-size:8px; color:#64748B;";
+  brand.textContent = "DETOXIFY ON-DEMAND";
+  const closeBtn = document.createElement("button");
+  closeBtn.id = "aegis-tooltip-close-btn";
+  closeBtn.style.cssText = "background:none; border:none; color:#94A3B8; font-size:9px; cursor:pointer; font-weight:700;";
+  closeBtn.textContent = "Close";
+  footer.appendChild(brand);
+  footer.appendChild(closeBtn);
+
+  floatingTooltipElement.appendChild(header);
+  floatingTooltipElement.appendChild(details);
+  floatingTooltipElement.appendChild(list);
+  floatingTooltipElement.appendChild(footer);
 
   document.body.appendChild(floatingTooltipElement);
   setTimeout(() => floatingTooltipElement.classList.add("show"), 50);
 
-  document.getElementById("aegis-tooltip-close-btn").addEventListener("click", () => {
-    removeFloatingTooltip();
-  });
+  closeBtn.addEventListener("click", removeFloatingTooltip);
 
   // Auto remove after 10 seconds
   const selfElement = floatingTooltipElement;
@@ -1720,6 +1798,13 @@ document.addEventListener("mouseover", (e) => {
 
 // Keypress listener for hotkey triggers (supports Option/Alt, Control, or custom shortcuts)
 document.addEventListener("keydown", (e) => {
+  // Ignore key repeats (holding Alt/Control used to fire repeated scans)
+  if (e.repeat) return;
+  // Don't hijack typing inside inputs/textareas/contenteditable
+  const target = e.target;
+  if (target && target.closest && target.closest("input, textarea, select, [contenteditable='true'], [contenteditable='']")) {
+    return;
+  }
   // Trigger on Alt (Option on Mac), Control, or Alt+A / Ctrl+A combos
   const isTriggerKey = e.key === "Alt" || e.key === "Control" || (e.altKey && e.key.toLowerCase() === "a") || (e.ctrlKey && e.key.toLowerCase() === "a");
   if (isTriggerKey && hoveredElement) {
@@ -1777,14 +1862,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  else if (request.action === "toggleHUD") {
-    const existingHud = document.getElementById("aegis-hud-btn");
-    if (existingHud) {
-      existingHud.remove();
-    }
-    sendResponse({ status: "success", enabled: false });
-  }
-
   else if (request.action === "scanSelectedText") {
     // Context Menu Trigger: analyze selected text segment
     const textSegment = request.text || "";
@@ -1835,6 +1912,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   else if (request.action === "updateSettings") {
     const settings = request.settings;
+
+    // Apply sensitivity changes immediately (not just on the next full scan)
+    if (settings && typeof settings.sensitivity === "number") {
+      scanSensitivity = settings.sensitivity;
+    }
     
     // Image overlays setting
     const autoOverlays = (settings && settings.autoImageOverlays !== undefined) ? settings.autoImageOverlays : false;
@@ -1855,6 +1937,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (existingVibeBar) {
         existingVibeBar.classList.remove("show");
         document.body.style.marginTop = "0px";
+        document.body.style.transition = "";
         setTimeout(() => existingVibeBar.remove(), 400);
       }
     }
@@ -1871,6 +1954,9 @@ try {
     const enableImg = settings ? settings.enableImageScan : true;
     const enableVid = settings ? settings.enableVideoScan : true;
     const autoOverlays = (settings && settings.autoImageOverlays !== undefined) ? settings.autoImageOverlays : false;
+    if (settings && typeof settings.sensitivity === "number") {
+      scanSensitivity = settings.sensitivity;
+    }
 
     injectStyles();
     if (!autoOverlays) {

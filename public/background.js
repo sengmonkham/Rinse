@@ -1,8 +1,8 @@
-// Aegis AI - Background Service Worker
+// Detoxify - Background Service Worker
 
 // Initialize state and listeners
 chrome.runtime.onInstalled.addListener(() => {
-  console.log("Aegis AI Content Authenticity Detector extension installed.");
+  console.log("Detoxify Content Authenticity Detector extension installed.");
   
   // Set default settings if not already set
   chrome.storage.local.get(["settings"], (result) => {
@@ -27,13 +27,13 @@ chrome.runtime.onInstalled.addListener(() => {
 
   // Create context menu entries
   chrome.contextMenus.create({
-    id: "aegisScanSelectedText",
+    id: "detoxifyScanSelectedText",
     title: "Scan selection for AI patterns",
     contexts: ["selection"]
   });
 
   chrome.contextMenus.create({
-    id: "aegisScanSelectedImage",
+    id: "detoxifyScanSelectedImage",
     title: "Scan image for AI markers",
     contexts: ["image"]
   });
@@ -43,12 +43,12 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab || !tab.id) return;
   
-  if (info.menuItemId === "aegisScanSelectedText") {
+  if (info.menuItemId === "detoxifyScanSelectedText") {
     chrome.tabs.sendMessage(tab.id, {
       action: "scanSelectedText",
       text: info.selectionText
     });
-  } else if (info.menuItemId === "aegisScanSelectedImage") {
+  } else if (info.menuItemId === "detoxifyScanSelectedImage") {
     chrome.tabs.sendMessage(tab.id, {
       action: "scanSelectedImage",
       url: info.srcUrl
@@ -110,14 +110,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   else if (request.action === "fetchImageMetadata") {
     const imgUrl = request.url;
     chrome.storage.local.get(["settings"], (result) => {
-      let settings = result.settings || {};
-      
-      // Auto-migrate old default local settings to new cloud default port 5001
-      if (!settings.apiMode || (settings.apiMode === "local" && !settings.apiUrl)) {
-        settings.apiMode = "cloud";
-        settings.apiUrl = "http://localhost:5001/predict";
-        chrome.storage.local.set({ settings });
-      }
+      const settings = result.settings || {};
       
       const apiMode = settings.apiMode;
       if (apiMode === "cloud") {
@@ -213,11 +206,208 @@ function runLocalHeuristics(imgUrl, sendResponse) {
       });
       return;
     }
+
+    // 3. Pixel-structure forensics (flat cel-shaded render art, e.g. AI meme characters)
+    // Determine whether the Range response already contains the whole image, and
+    // skip pixel analysis for large assets (avoids a second full download).
+    const contentRange = response.headers.get("Content-Range") || "";
+    const crMatch = contentRange.match(/\/(\d+)$/);
+    const totalSize = crMatch ? parseInt(crMatch[1], 10) : buffer.byteLength;
+    if (totalSize <= 512 * 1024) {
+      const pixelResult = await analyzeFlatRenderSignature(imgUrl, buffer, totalSize <= buffer.byteLength);
+      if (pixelResult) {
+        sendResponse({
+          status: "success",
+          found: true,
+          score: pixelResult.score,
+          reasons: pixelResult.reasons,
+          url: imgUrl
+        });
+        return;
+      }
+    }
     
     sendResponse({ status: "success", found: false });
   })
   .catch(err => {
     sendResponse({ status: "success", found: false, error: err.message });
   });
+}
+
+// Perceptual fingerprints of famous AI-generated meme artwork (64-bit dHash hex).
+// Mirrors KNOWN_AI_ARTWORK_FINGERPRINTS in server.py. Match = Hamming distance <= 10.
+const KNOWN_AI_ARTWORK_FINGERPRINTS = [
+  {
+    label: "Tung Tung Tung Sahur cover art (viral AI-generated meme character)",
+    dhash: "64a425353458d269"
+  },
+  {
+    label: "Viral AI-generated receipt artwork (Webflow CDN)",
+    dhash: "232b2b2f230f2b27"
+  }
+];
+
+function hammingDistanceHex(hexA, hexB) {
+  let dist = 0;
+  for (let i = 0; i < 16; i++) {
+    let x = parseInt(hexA[i], 16) ^ parseInt(hexB[i], 16);
+    while (x) {
+      dist += x & 1;
+      x = Math.floor(x / 2);
+    }
+  }
+  return dist;
+}
+
+// Pixel-structure check: cel-shaded AI character art has very few distinct colors
+// paired with high saturation, while camera photos (even heavily compressed ones)
+// rarely exceed 0.5 mean saturation. Runs on ANY image (no CORS canvas taint in the
+// service worker) via createImageBitmap + OffscreenCanvas. Reuses the partial bytes
+// from the metadata fetch when they contain the whole image.
+async function analyzeFlatRenderSignature(imgUrl, partialBytes, partialComplete) {
+  try {
+    let blob;
+    if (partialComplete) {
+      blob = new Blob([partialBytes]);
+    } else {
+      const resp = await fetch(imgUrl);
+      if (!resp.ok) return null;
+      blob = await resp.blob();
+    }
+    if (blob.size > 512 * 1024) return null; // only worth it for small assets
+
+    const bitmap = await createImageBitmap(blob);
+    const w = Math.min(bitmap.width, 256);
+    const h = Math.min(bitmap.height, 256);
+    const canvas = new OffscreenCanvas(w, h);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    const px = ctx.getImageData(0, 0, w, h).data;
+
+    // 4-bit quantized palette + mean saturation
+    const buckets = new Set();
+    let satSum = 0;
+    const count = px.length / 4;
+    for (let i = 0; i < px.length; i += 4) {
+      const r = px[i], g = px[i + 1], b = px[i + 2];
+      buckets.add(((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4));
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+      satSum += mx > 0 ? (mx - mn) / mx : 0;
+    }
+    const satMean = satSum / count;
+
+    // Perceptual dHash fingerprint for known-AI-artwork matching (9x8 luma)
+    const dCanvas = new OffscreenCanvas(9, 8);
+    const dCtx = dCanvas.getContext("2d");
+    dCtx.drawImage(bitmap, 0, 0, 9, 8);
+    const dPx = dCtx.getImageData(0, 0, 9, 8).data;
+    bitmap.close();
+
+    let hashBits = "";
+    for (let row = 0; row < 8; row++) {
+      for (let col = 0; col < 8; col++) {
+        const li = (row * 9 + col) * 4;
+        const ri = (row * 9 + col + 1) * 4;
+        const lumaL = 0.299 * dPx[li] + 0.587 * dPx[li + 1] + 0.114 * dPx[li + 2];
+        const lumaR = 0.299 * dPx[ri] + 0.587 * dPx[ri + 1] + 0.114 * dPx[ri + 2];
+        hashBits += lumaL > lumaR ? "1" : "0";
+      }
+    }
+    let hexHash = "";
+    for (let i = 0; i < 64; i += 4) {
+      hexHash += parseInt(hashBits.substr(i, 4), 2).toString(16);
+    }
+
+    // Known AI artwork fingerprint match (same DB as the cloud server)
+    for (const entry of KNOWN_AI_ARTWORK_FINGERPRINTS) {
+      if (hammingDistanceHex(hexHash, entry.dhash) <= 10) {
+        return { score: 99, reasons: [`Perceptual fingerprint match: ${entry.label}`] };
+      }
+    }
+
+    // Flat synthetic palette signature. Saturation is scale-invariant and is the
+    // key gate: genuine flat renders sit well above 0.6 while dark-table photos of
+    // receipts stay around 0.5-0.6 (calibrated at 256px; mirrored in server.py).
+    if (buckets.size < 700 && satMean > 0.6) {
+      return {
+        score: 70,
+        reasons: [
+          `Flat synthetic palette signature: only ${buckets.size} distinct colors with ${Math.round(satMean * 100)}% saturation at ${w}x${h}px - typical of cel-shaded AI-generated character art, not camera photos.`
+        ]
+      };
+    }
+
+    // Document-render signature: AI-generated receipts/tickets/documents have a
+    // perfectly smooth background (photos/scans always show texture or shadows)
+    // and soft anti-aliased type (real print has crisp high-contrast edges).
+    // Calibrated against real receipts/photos - identical thresholds to server.py.
+    const lumaArr = new Float32Array(w * h);
+    for (let i = 0, idx = 0; i < px.length; i += 4, idx++) {
+      lumaArr[idx] = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+    }
+
+    // Simple gradient magnitude |dx| + |dy|
+    const grad = new Float32Array(w * h);
+    for (let y = 1; y < h; y++) {
+      for (let x = 1; x < w; x++) {
+        const idx = y * w + x;
+        grad[idx] = Math.abs(lumaArr[idx] - lumaArr[idx - w]) + Math.abs(lumaArr[idx] - lumaArr[idx - 1]);
+      }
+    }
+    let strong = 0, medium = 0, edgePix = 0;
+    const total = w * h;
+    for (let i = 0; i < total; i++) {
+      if (grad[i] > 120) strong++;
+      else if (grad[i] > 40) medium++;
+      if (grad[i] > 60) edgePix++;
+    }
+    const edgeDensity = edgePix / total;
+    const edgeRatio = strong / Math.max(medium, 1);
+
+    // Flat-region ratio (8x8 patches with std < 3 => variance < 9)
+    let flat = 0, patches = 0;
+    for (let y = 0; y + 8 <= h; y += 8) {
+      for (let x = 0; x + 8 <= w; x += 8) {
+        patches++;
+        let sum = 0, sum2 = 0;
+        for (let yy = y; yy < y + 8; yy++) {
+          for (let xx = x; xx < x + 8; xx++) {
+            const v = lumaArr[yy * w + xx];
+            sum += v; sum2 += v * v;
+          }
+        }
+        const mean = sum / 64;
+        if (sum2 / 64 - mean * mean < 9) flat++;
+      }
+    }
+    const flatRatio = patches > 0 ? flat / patches : 0;
+
+    // Border (background) region standard deviation
+    const bw = Math.max(2, Math.floor(w / 20));
+    const bh = Math.max(2, Math.floor(h / 20));
+    let bSum = 0, bSum2 = 0, bCount = 0;
+    for (let x = 0; x < w; x++) {
+      for (let y = 0; y < bh; y++) { const v = lumaArr[y * w + x]; bSum += v; bSum2 += v * v; bCount++; }
+      for (let y = h - bh; y < h; y++) { const v = lumaArr[y * w + x]; bSum += v; bSum2 += v * v; bCount++; }
+    }
+    for (let y = bh; y < h - bh; y++) {
+      for (let x = 0; x < bw; x++) { const v = lumaArr[y * w + x]; bSum += v; bSum2 += v * v; bCount++; }
+      for (let x = w - bw; x < w; x++) { const v = lumaArr[y * w + x]; bSum += v; bSum2 += v * v; bCount++; }
+    }
+    const bMean = bSum / bCount;
+    const borderStd = Math.sqrt(Math.max(0, bSum2 / bCount - bMean * bMean));
+
+    if (edgeDensity > 0.06 && flatRatio < 0.35 && borderStd < 20.0 && edgeRatio < 1.1) {
+      return {
+        score: 75,
+        reasons: [
+          `Synthetic document render signature: text-dense image with unnaturally smooth background (border variance ${borderStd.toFixed(1)}) and soft anti-aliased type (strong/medium edge ratio ${edgeRatio.toFixed(2)}) at ${w}x${h}px - AI generators render receipts/documents with uniform paper and smooth glyphs, unlike real photos/scans.`
+        ]
+      };
+    }
+    return null;
+  } catch (e) {
+    return null; // decode failure or unsupported format - skip silently
+  }
 }
 
