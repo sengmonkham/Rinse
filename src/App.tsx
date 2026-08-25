@@ -47,6 +47,15 @@ export interface ScanResults {
   };
 }
 
+export interface SubscriptionState {
+  isPaying: boolean;
+  plan: string;
+  status: string;
+  expiresAt: string | null;
+  licenseKey: string | null;
+  lastChecked: number | null;
+}
+
 export interface AppSettings {
   enableTextScan: boolean;
   enableImageScan: boolean;
@@ -58,6 +67,8 @@ export interface AppSettings {
   apiMode: string;
   apiUrl: string;
   apiKey: string;
+  webAppUrl?: string;
+  authToken?: string;
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -70,7 +81,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   showVibecodedAlert: false,
   apiMode: "local",
   apiUrl: "",
-  apiKey: ""
+  apiKey: "",
+  webAppUrl: "http://localhost:3000",
+  authToken: ""
 };
 
 // Computed once at module load — never changes during the session.
@@ -115,6 +128,19 @@ export default function App() {
       }
     }
     return DEFAULT_SETTINGS;
+  });
+
+  const [subscription, setSubscription] = useState<SubscriptionState>(() => {
+    if (typeof window === "undefined") return { isPaying: false, plan: "free", status: "inactive", expiresAt: null, licenseKey: null, lastChecked: null };
+    const saved = localStorage.getItem("rinse_subscription");
+    if (saved) {
+      try {
+        return JSON.parse(saved) as SubscriptionState;
+      } catch {
+        // Ignore corrupt saved subscription
+      }
+    }
+    return { isPaying: false, plan: "free", status: "inactive", expiresAt: null, licenseKey: null, lastChecked: null };
   });
 
   const [scanHistory, setScanHistory] = useState<ScanHistoryEntry[]>(() => {
@@ -178,14 +204,85 @@ export default function App() {
         }
       });
 
-      // 2. Load settings and history from extension local storage
-      chrome.storage.local.get(["settings", "scanHistory"], (result: Record<string, unknown>) => {
+      // 2. Load settings, subscription and history from extension local storage
+      chrome.storage.local.get(["settings", "scanHistory", "subscriptionState"], (result: Record<string, unknown>) => {
         if (result.settings) setSettings(result.settings as AppSettings);
         if (result.scanHistory) setScanHistory(result.scanHistory as ScanHistoryEntry[]);
+        if (result.subscriptionState) setSubscription(result.subscriptionState as SubscriptionState);
       });
     }
-    // Standalone mode: settings and history load lazily from localStorage above; initial scan state is neutral.
+    // Standalone mode: settings, subscription and history load lazily from localStorage above; initial scan state is neutral.
   }, []);
+
+  // Sync subscription status with web app
+  const handleSyncSubscription = useCallback(async (): Promise<SubscriptionState> => {
+    if (IS_CHROME_EXT) {
+      return new Promise<SubscriptionState>((resolve) => {
+        chrome.runtime.sendMessage({ action: "syncSubscription" }, (response: MessageResponse) => {
+          if (response && response.status === "success" && response.data) {
+            const nextState = response.data as SubscriptionState;
+            setSubscription(nextState);
+            resolve(nextState);
+          } else {
+            chrome.storage.local.get(["subscriptionState"], (res: Record<string, unknown>) => {
+              const current = (res.subscriptionState as SubscriptionState) || {
+                isPaying: false,
+                plan: "free",
+                status: "inactive",
+                expiresAt: null,
+                licenseKey: null,
+                lastChecked: Date.now()
+              };
+              setSubscription(current);
+              resolve(current);
+            });
+          }
+        });
+      });
+    } else {
+      // Standalone simulator mode
+      const webUrl = (settings.webAppUrl || "http://localhost:3000").replace(/\/$/, "");
+      const token = settings.authToken || settings.apiKey || "";
+      if (!token) {
+        const freeState: SubscriptionState = {
+          isPaying: false,
+          plan: "free",
+          status: "inactive",
+          expiresAt: null,
+          licenseKey: null,
+          lastChecked: Date.now()
+        };
+        setSubscription(freeState);
+        localStorage.setItem("rinse_subscription", JSON.stringify(freeState));
+        return freeState;
+      }
+      try {
+        const res = await fetch(`${webUrl}/api/v1/me`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const syncedState: SubscriptionState = {
+            isPaying: Boolean(data.is_paying),
+            plan: data.plan || "free",
+            status: data.is_paying ? "active" : "inactive",
+            expiresAt: data.expires_at || null,
+            licenseKey: data.license_key || null,
+            lastChecked: Date.now()
+          };
+          setSubscription(syncedState);
+          localStorage.setItem("rinse_subscription", JSON.stringify(syncedState));
+          return syncedState;
+        } else {
+          throw new Error(`HTTP ${res.status}`);
+        }
+      } catch (e: unknown) {
+        const errMsg = e instanceof Error ? e.message : "Unknown error";
+        console.warn("Sync failed in standalone mode:", errMsg);
+        return subscription;
+      }
+    }
+  }, [settings.webAppUrl, settings.authToken, settings.apiKey, subscription]);
 
   // Update Settings
   const handleSaveSettings = useCallback((newSettings: AppSettings) => {
@@ -320,6 +417,35 @@ export default function App() {
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {subscription.isPaying ? (
+            <span 
+              className="badge-version" 
+              style={{ 
+                color: '#059669', 
+                background: 'rgba(5, 150, 105, 0.12)', 
+                border: '1px solid rgba(5, 150, 105, 0.3)',
+                fontWeight: 700,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+            >
+              <Sparkles size={10} color="#059669" />
+              {subscription.plan.toUpperCase()}
+            </span>
+          ) : (
+            <span 
+              className="badge-version" 
+              style={{ 
+                color: 'var(--text-muted)', 
+                background: 'rgba(15, 23, 42, 0.04)', 
+                border: '1px solid rgba(15, 23, 42, 0.08)',
+                fontWeight: 600
+              }}
+            >
+              FREE
+            </span>
+          )}
           {isStandalone && (
             <span className="badge-version" style={{ color: '#06b6d4', background: 'rgba(6, 182, 212, 0.1)', border: '1px solid rgba(6, 182, 212, 0.2)' }}>
               DEV SIMULATOR
@@ -457,7 +583,9 @@ export default function App() {
         {activeTab === 'settings' && (
           <Settings 
             settings={settings} 
-            onSave={handleSaveSettings} 
+            onSave={handleSaveSettings}
+            subscription={subscription}
+            onSyncSubscription={handleSyncSubscription}
           />
         )}
       </main>

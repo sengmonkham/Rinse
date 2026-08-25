@@ -5,7 +5,7 @@ chrome.runtime.onInstalled.addListener(() => {
   console.log("RINSE (Remove Inauthentic Noise) extension installed.");
   
   // Set default settings if not already set
-  chrome.storage.local.get(["settings"], (result) => {
+  chrome.storage.local.get(["settings", "subscriptionState"], (result) => {
     if (!result.settings) {
       chrome.storage.local.set({
         settings: {
@@ -18,12 +18,33 @@ chrome.runtime.onInstalled.addListener(() => {
           showVibecodedAlert: false,
           apiMode: "local", // "local" or "cloud"
           apiUrl: "",
-          apiKey: ""
+          apiKey: "",
+          webAppUrl: "http://localhost:3000",
+          authToken: ""
         },
         scanHistory: []
       });
     }
+
+    if (!result.subscriptionState) {
+      chrome.storage.local.set({
+        subscriptionState: {
+          isPaying: false,
+          plan: "free",
+          status: "inactive",
+          expiresAt: null,
+          licenseKey: null,
+          lastChecked: null
+        }
+      });
+    }
   });
+
+  // Schedule periodic subscription status check (every 6 hours)
+  chrome.alarms.create("checkSubscription", { periodInMinutes: 360 });
+
+  // Initial subscription check
+  checkSubscriptionStatus();
 
   // Create context menu entries
   chrome.contextMenus.create({
@@ -38,6 +59,79 @@ chrome.runtime.onInstalled.addListener(() => {
     contexts: ["image"]
   });
 });
+
+// Periodic alarm listener
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "checkSubscription") {
+    checkSubscriptionStatus();
+  }
+});
+
+// Extension startup listener
+chrome.runtime.onStartup.addListener(() => {
+  checkSubscriptionStatus();
+});
+
+// Query /api/v1/me on the web app to verify subscription status
+function checkSubscriptionStatus(sendResponse) {
+  chrome.storage.local.get(["settings", "subscriptionState"], (result) => {
+    const settings = result.settings || {};
+    const webAppUrl = (settings.webAppUrl || "http://localhost:3000").replace(/\/$/, "");
+    const token = settings.authToken || settings.apiKey || "";
+
+    if (!token) {
+      const freeState = {
+        isPaying: false,
+        plan: "free",
+        status: "inactive",
+        expiresAt: null,
+        licenseKey: null,
+        lastChecked: Date.now()
+      };
+      chrome.storage.local.set({ subscriptionState: freeState }, () => {
+        if (sendResponse) sendResponse({ status: "success", data: freeState, unauthenticated: true });
+      });
+      return;
+    }
+
+    fetch(`${webAppUrl}/api/v1/me`, {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${token}`
+      }
+    })
+    .then(async (res) => {
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      return res.json();
+    })
+    .then((data) => {
+      const state = {
+        isPaying: Boolean(data.is_paying),
+        plan: data.plan || "free",
+        status: data.is_paying ? "active" : "inactive",
+        expiresAt: data.expires_at || null,
+        licenseKey: data.license_key || null,
+        lastChecked: Date.now()
+      };
+      chrome.storage.local.set({ subscriptionState: state }, () => {
+        console.log("RINSE Subscription status updated:", state);
+        if (sendResponse) sendResponse({ status: "success", data: state });
+      });
+    })
+    .catch((err) => {
+      console.warn("Failed to check subscription status:", err.message);
+      if (sendResponse) {
+        sendResponse({
+          status: "error",
+          error: err.message,
+          data: result.subscriptionState || { isPaying: false, plan: "free" }
+        });
+      }
+    });
+  });
+}
 
 // Handle context menu clicks
 chrome.contextMenus.onClicked.addListener((info, tab) => {
@@ -149,6 +243,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
     });
     return true; // Keep message channel open for async response
+  }
+  
+  else if (request.action === "syncSubscription") {
+    checkSubscriptionStatus((response) => {
+      sendResponse(response);
+    });
+    return true; // Keep message channel open for async response
+  }
+  
+  else if (request.action === "getSubscriptionState") {
+    chrome.storage.local.get(["subscriptionState"], (result) => {
+      sendResponse({
+        status: "success",
+        data: result.subscriptionState || {
+          isPaying: false,
+          plan: "free",
+          status: "inactive",
+          expiresAt: null,
+          licenseKey: null,
+          lastChecked: null
+        }
+      });
+    });
+    return true;
   }
   
   return true; // Keep channel open

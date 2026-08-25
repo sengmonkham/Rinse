@@ -1,4 +1,5 @@
 import os
+import io
 import hmac
 import tempfile
 import base64
@@ -286,122 +287,294 @@ def analyze_image_heuristics(img_path):
         
     return score, reasons
 
-@app.route("/predict", methods=["POST"])
-@app.route("/v1/predict", methods=["POST"])
-def predict():
-    if not _check_auth():
-        return jsonify({"error": "Unauthorized: missing or invalid Bearer token."}), 401
+from forensics import (
+    probe_synthid_watermark,
+    probe_c2pa_manifest,
+    analyze_frequency_domain,
+    analyze_neural_and_heatmap,
+    analyze_video_temporal_coherence,
+    fuse_ensemble_verdict,
+)
 
-    data = request.get_json() or {}
+
+def _load_image_from_payload(data):
+    """
+    Safely extract PIL Image, raw bytes, and optional temp file from JSON payload.
+    Returns: (img, raw_bytes, temp_file_path, error_tuple)
+    """
     image_url = data.get("image_url")
     image_base64 = data.get("image_base64")
-    
+
     if not image_url and not image_base64:
-        return jsonify({"error": "No image source provided. Set 'image_url' or 'image_base64'."}), 400
+        return None, None, None, (jsonify({"error": "No image source provided. Set 'image_url' or 'image_base64'."}), 400)
 
-    # Reject oversized base64 payloads before decoding
     if image_base64 and len(image_base64) > MAX_IMAGE_BYTES * 2:
-        return jsonify({"error": "Image payload too large."}), 413
-        
-    temp_file = None
-    
-    try:
-        # Create a temporary file to store the image for processing
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as f:
-            temp_file = f.name
-            
-            if image_base64:
-                # Handle base64 encoded image
-                # Strip metadata header if present (e.g. data:image/png;base64,)
-                if "," in image_base64:
-                    image_base64 = image_base64.split(",")[1]
-                img_bytes = base64.b64decode(image_base64)
-                if len(img_bytes) > MAX_IMAGE_BYTES:
-                    return jsonify({"error": "Image payload too large."}), 413
-                f.write(img_bytes)
-            else:
-                # Only fetch http(s) sources (avoid internal-network / file targets)
-                parsed = urlparse(image_url)
-                if parsed.scheme not in ("http", "https"):
-                    return jsonify({"error": "Invalid image URL: only http(s) sources are allowed."}), 400
-                # Download image from URL with a size cap
-                headers = {"User-Agent": "RINSEAuthenticityDetector/1.0"}
-                resp = requests.get(image_url, headers=headers, timeout=15, stream=True)
-                resp.raise_for_status()
-                total = 0
-                for chunk in resp.iter_content(chunk_size=64 * 1024):
-                    total += len(chunk)
-                    if total > MAX_IMAGE_BYTES:
-                        resp.close()
-                        return jsonify({"error": "Image download too large."}), 413
-                    f.write(chunk)
-                
-        # Perform image AI detection
-        if DETECTZOO_AVAILABLE and detector is not None:
-            print(f"Running DetectZoo prediction on file: {temp_file}")
-            result = detector.predict(temp_file)
-            
-            # Extract score from DetectZoo result
-            # DetectZoo predict returns a standardized DetectionResult dataclass
-            score = 50  # Default fallback
-            if hasattr(result, "score"):
-                # Typically score is normalized between 0-100 or 0-1
-                score = result.score
-                if score <= 1.0:
-                    score = int(score * 100)
-            elif hasattr(result, "probability"):
-                prob = result.probability
-                score = int(prob * 100) if prob <= 1.0 else int(prob)
-            elif isinstance(result, dict) and "score" in result:
-                score = result["score"]
-                if score <= 1.0:
-                    score = int(score * 100)
-            elif isinstance(result, (int, float)):
-                score = int(result * 100) if result <= 1.0 else int(result)
-            
-            reasons = [
-                f"DetectZoo Model classification score: {score}% confidence",
-                f"Evaluation model used: '{detector.__class__.__name__}'",
-                "Anomaly mapping suggests synthetic pixel grid generation." if score >= 60 else "Pixel distribution looks authentic to human camera capture."
-            ]
+        return None, None, None, (jsonify({"error": "Image payload too large."}), 413)
 
-            # Supplement weak model verdicts with pixel-structure forensics (skip when the model is already confident)
-            forensics = _pixel_forensics(temp_file) if score < 80 else None
-            if forensics:
-                if forensics["boost"] and score < forensics["boost"]:
-                    score = forensics["boost"]
-                    reasons.append(forensics["reason"])
-                if forensics["doc_boost"] and score < forensics["doc_boost"]:
-                    score = forensics["doc_boost"]
-                    reasons.append(forensics["doc_reason"])
-                if forensics["match_label"]:
-                    score = 99
-                    reasons.append(f"Perceptual fingerprint match: {forensics['match_label']}")
+    raw_bytes = b""
+    temp_file = None
+
+    try:
+        if image_base64:
+            if "," in image_base64:
+                image_base64 = image_base64.split(",")[1]
+            raw_bytes = base64.b64decode(image_base64)
+            if len(raw_bytes) > MAX_IMAGE_BYTES:
+                return None, None, None, (jsonify({"error": "Image payload exceeds 20MB limit."}), 413)
         else:
-            # Fall back to simulated heuristic metrics
-            print("DetectZoo offline: Running heuristic classifier...")
-            score, reasons = analyze_image_heuristics(temp_file)
-            reasons.append("API Server note: Running in simulation mode because PyTorch/DetectZoo is offline.")
-            
-        return jsonify({
-            "score": min(99, max(1, score)),
-            "reasons": reasons
-        })
-        
+            parsed = urlparse(image_url)
+            if parsed.scheme not in ("http", "https"):
+                return None, None, None, (jsonify({"error": "Invalid image URL: only http(s) sources are allowed."}), 400)
+            headers = {"User-Agent": "RINSEAuthenticityDetector/2.0"}
+            resp = requests.get(image_url, headers=headers, timeout=15, stream=True)
+            resp.raise_for_status()
+            chunks = []
+            total = 0
+            for chunk in resp.iter_content(chunk_size=64 * 1024):
+                total += len(chunk)
+                if total > MAX_IMAGE_BYTES:
+                    resp.close()
+                    return None, None, None, (jsonify({"error": "Image download too large."}), 413)
+                chunks.append(chunk)
+            raw_bytes = b"".join(chunks)
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as f:
+            f.write(raw_bytes)
+            temp_file = f.name
+
+        img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+        return img, raw_bytes, temp_file, None
     except Exception as e:
-        print(f"Error handling request: {e}")
-        return jsonify({
-            "score": 50,
-            "reasons": [f"Error scanning image via Python server: {str(e)}", "Please check server console outputs."]
-        }), 500
-        
-    finally:
-        # Clean up temporary file
         if temp_file and os.path.exists(temp_file):
             try:
                 os.remove(temp_file)
             except Exception:
                 pass
+        return None, None, None, (jsonify({"error": f"Failed to load image: {str(e)}"}), 400)
+
+
+@app.route("/predict/synthid/probe", methods=["GET", "POST"])
+def predict_synthid_probe():
+    """Layer 1 standalone probe endpoint."""
+    if not _check_auth():
+        return jsonify({"error": "Unauthorized: missing or invalid Bearer token."}), 401
+
+    data = request.get_json() if request.is_json else request.args.to_dict()
+    img, raw_bytes, temp_file, err = _load_image_from_payload(data)
+    if err:
+        return err
+
+    try:
+        synthid_res = probe_synthid_watermark(img)
+        return jsonify(synthid_res)
+    finally:
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except Exception:
+                pass
+
+
+@app.route("/predict/image/fast", methods=["POST"])
+def predict_image_fast():
+    """Fast path (<100ms): Evaluates Layers 1 (SynthID), 2 (C2PA), and 3 (Frequency Forensics)."""
+    if not _check_auth():
+        return jsonify({"error": "Unauthorized: missing or invalid Bearer token."}), 401
+
+    data = request.get_json() or {}
+    img, raw_bytes, temp_file, err = _load_image_from_payload(data)
+    if err:
+        return err
+
+    try:
+        s1 = probe_synthid_watermark(img)
+        s2 = probe_c2pa_manifest(img, raw_bytes=raw_bytes)
+        s3 = analyze_frequency_domain(img)
+
+        verdict = fuse_ensemble_verdict(
+            layers={
+                "synthid": s1["score"],
+                "c2pa": s2["score"],
+                "frequency": s3["score"],
+                "neural": None
+            },
+            layer_reasons={
+                "synthid": [s1["reason"]] if s1.get("reason") else [],
+                "c2pa": [s2["reason"]] if s2.get("reason") else [],
+                "frequency": s3.get("reasons", [])
+            },
+            is_video=False,
+            extra_data={
+                "mode": "fast",
+                "frequency_metrics": s3.get("metrics", {})
+            }
+        )
+        return jsonify(verdict)
+    finally:
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except Exception:
+                pass
+
+
+@app.route("/predict/image/deep", methods=["POST"])
+@app.route("/predict", methods=["POST"])
+@app.route("/v1/predict", methods=["POST"])
+def predict_image_deep():
+    """Deep path: Evaluates all 4 image layers (SynthID, C2PA, Frequency, Neural & ViT Patch Heatmap)."""
+    if not _check_auth():
+        return jsonify({"error": "Unauthorized: missing or invalid Bearer token."}), 401
+
+    data = request.get_json() or {}
+    img, raw_bytes, temp_file, err = _load_image_from_payload(data)
+    if err:
+        return err
+
+    try:
+        # Layer 1: SynthID
+        s1 = probe_synthid_watermark(img)
+        # Layer 2: C2PA
+        s2 = probe_c2pa_manifest(img, raw_bytes=raw_bytes)
+        # Layer 3: Frequency Forensics
+        s3 = analyze_frequency_domain(img)
+        # Layer 4: Semantic Neural Classifier & ViT Patch Heatmap
+        s4 = analyze_neural_and_heatmap(temp_file, img)
+
+        # Pixel forensics & known fingerprints supplement
+        pf = _pixel_forensics(temp_file) if temp_file else None
+        pf_reasons = []
+        if pf:
+            if pf["match_label"]:
+                s1["score"] = 99
+                pf_reasons.append(f"Perceptual fingerprint match: {pf['match_label']}")
+            if pf["boost"] and (s4["score"] is None or s4["score"] < pf["boost"]):
+                s4["score"] = pf["boost"]
+                pf_reasons.append(pf["reason"])
+            if pf["doc_boost"] and (s4["score"] is None or s4["score"] < pf["doc_boost"]):
+                s4["score"] = pf["doc_boost"]
+                pf_reasons.append(pf["doc_reason"])
+
+        neural_reasons = s4.get("reasons", []) + pf_reasons
+
+        verdict = fuse_ensemble_verdict(
+            layers={
+                "synthid": s1["score"],
+                "c2pa": s2["score"],
+                "frequency": s3["score"],
+                "neural": s4["score"]
+            },
+            layer_reasons={
+                "synthid": [s1["reason"]] if s1.get("reason") else [],
+                "c2pa": [s2["reason"]] if s2.get("reason") else [],
+                "frequency": s3.get("reasons", []),
+                "neural": neural_reasons
+            },
+            is_video=False,
+            extra_data={
+                "mode": "deep",
+                "heatmap_grid": s4.get("heatmap_grid"),
+                "heatmap_overlay_base64": s4.get("heatmap_overlay_base64"),
+                "synthetic_patches_count": s4.get("synthetic_patches_count", 0),
+                "frequency_metrics": s3.get("metrics", {}),
+                "neural_submodels": s4.get("submodels", {})
+            }
+        )
+        return jsonify(verdict)
+    except Exception as e:
+        print(f"Error handling deep prediction: {e}")
+        return jsonify({
+            "score": 50,
+            "confidence": "LOW",
+            "tier": "INCONCLUSIVE",
+            "reasons": [f"Deep forensic scan error: {str(e)}"]
+        }), 500
+    finally:
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except Exception:
+                pass
+
+
+@app.route("/predict/video/deep", methods=["POST"])
+def predict_video_deep():
+    """Video path: Evaluates 5 layers (Spatial 1-4 + Layer 5 Temporal Coherence Analysis)."""
+    if not _check_auth():
+        return jsonify({"error": "Unauthorized: missing or invalid Bearer token."}), 401
+
+    data = request.get_json() or {}
+    frames_b64 = data.get("frames_base64") or []
+    
+    loaded_frames = []
+    if frames_b64 and isinstance(frames_b64, list):
+        for item in frames_b64[:30]:  # Cap at 30 frames
+            try:
+                if "," in item:
+                    item = item.split(",")[1]
+                b = base64.b64decode(item)
+                loaded_frames.append(Image.open(io.BytesIO(b)).convert("RGB"))
+            except Exception:
+                pass
+
+    # If single image provided as fallback
+    if not loaded_frames:
+        img, _, temp_file, err = _load_image_from_payload(data)
+        if err:
+            return err
+        loaded_frames = [img]
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except Exception:
+                pass
+
+    try:
+        # Spatial analysis on key middle frame
+        mid_frame = loaded_frames[len(loaded_frames) // 2]
+        s1 = probe_synthid_watermark(mid_frame)
+        s2 = probe_c2pa_manifest(mid_frame)
+        s3 = analyze_frequency_domain(mid_frame)
+        s4 = analyze_neural_and_heatmap("", mid_frame)
+
+        # Layer 5: Temporal Coherence
+        s5 = analyze_video_temporal_coherence(loaded_frames)
+
+        verdict = fuse_ensemble_verdict(
+            layers={
+                "synthid": s1["score"],
+                "c2pa": s2["score"],
+                "frequency": s3["score"],
+                "neural": s4["score"],
+                "temporal": s5["score"]
+            },
+            layer_reasons={
+                "synthid": [s1["reason"]] if s1.get("reason") else [],
+                "c2pa": [s2["reason"]] if s2.get("reason") else [],
+                "frequency": s3.get("reasons", []),
+                "neural": s4.get("reasons", []),
+                "temporal": s5.get("reasons", [])
+            },
+            is_video=True,
+            extra_data={
+                "mode": "video_deep",
+                "frames_analyzed": len(loaded_frames),
+                "frame_scores": s5.get("frame_scores", []),
+                "temporal_flicker_energy": s5.get("temporal_flicker_energy", 0.0),
+                "motion_residual_variance": s5.get("motion_residual_variance", 0.0),
+                "heatmap_grid": s4.get("heatmap_grid"),
+                "heatmap_overlay_base64": s4.get("heatmap_overlay_base64")
+            }
+        )
+        return jsonify(verdict)
+    except Exception as e:
+        print(f"Video analysis error: {e}")
+        return jsonify({
+            "score": 50,
+            "confidence": "LOW",
+            "tier": "INCONCLUSIVE",
+            "reasons": [f"Video deep forensic analysis error: {str(e)}"]
+        }), 500
 
 # ---------------------------------------------------------------------------
 # StoryScope: narrative-feature AI fiction detection

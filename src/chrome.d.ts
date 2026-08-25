@@ -9,6 +9,7 @@ interface ChromeLastError {
 interface ChromeRuntime {
   readonly id: string | undefined;
   readonly lastError: ChromeLastError | undefined;
+  sendMessage(message: unknown, callback?: (response: MessageResponse) => void): void;
 }
 
 interface ChromeTabInfo {

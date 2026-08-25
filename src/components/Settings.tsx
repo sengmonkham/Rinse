@@ -1,13 +1,27 @@
 import { useState } from 'react';
-import { Settings as SettingsIcon, Save, RefreshCw, Eye, Sparkles } from 'lucide-react';
-import type { AppSettings } from '../App';
+import { 
+  Settings as SettingsIcon, 
+  Save, 
+  RefreshCw, 
+  Eye, 
+  Sparkles, 
+  User, 
+  ExternalLink, 
+  CreditCard, 
+  CheckCircle2, 
+  AlertCircle,
+  Key
+} from 'lucide-react';
+import type { AppSettings, SubscriptionState } from '../App';
 
 interface SettingsProps {
   settings: AppSettings;
   onSave: (settings: AppSettings) => void;
+  subscription?: SubscriptionState;
+  onSyncSubscription?: () => Promise<SubscriptionState>;
 }
 
-export default function Settings({ settings, onSave }: SettingsProps) {
+export default function Settings({ settings, onSave, subscription, onSyncSubscription }: SettingsProps) {
   const [enableText, setEnableText] = useState(settings.enableTextScan);
   const [enableImage, setEnableImage] = useState(settings.enableImageScan);
   const [enableVideo, setEnableVideo] = useState(settings.enableVideoScan);
@@ -18,8 +32,12 @@ export default function Settings({ settings, onSave }: SettingsProps) {
   const [apiMode, setApiMode] = useState(settings.apiMode);
   const [apiUrl, setApiUrl] = useState(settings.apiUrl);
   const [apiKey, setApiKey] = useState(settings.apiKey);
+  const [webAppUrl, setWebAppUrl] = useState(settings.webAppUrl || 'http://localhost:3000');
+  const [authToken, setAuthToken] = useState(settings.authToken || '');
   
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const handleSave = () => {
     onSave({
@@ -32,7 +50,9 @@ export default function Settings({ settings, onSave }: SettingsProps) {
       showVibecodedAlert: showVibecodedAlert,
       apiMode: apiMode,
       apiUrl: apiUrl,
-      apiKey: apiKey
+      apiKey: apiKey,
+      webAppUrl: webAppUrl,
+      authToken: authToken
     });
 
     setSavedSuccess(true);
@@ -50,11 +70,217 @@ export default function Settings({ settings, onSave }: SettingsProps) {
     setApiMode('local');
     setApiUrl('');
     setApiKey('');
+    setWebAppUrl('http://localhost:3000');
+    setAuthToken('');
   };
+
+  const handleSync = async () => {
+    if (!onSyncSubscription) return;
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      // First save the current auth token / webAppUrl
+      onSave({
+        enableTextScan: enableText,
+        enableImageScan: enableImage,
+        enableVideoScan: enableVideo,
+        sensitivity: sensitivity,
+        showInlineBadges: inlineBadges,
+        autoImageOverlays: autoImageOverlays,
+        showVibecodedAlert: showVibecodedAlert,
+        apiMode: apiMode,
+        apiUrl: apiUrl,
+        apiKey: apiKey,
+        webAppUrl: webAppUrl,
+        authToken: authToken
+      });
+
+      const updated = await onSyncSubscription();
+      if (updated.isPaying) {
+        setSyncResult({
+          type: 'success',
+          message: `Synced: ${updated.plan.toUpperCase()} Plan active`
+        });
+      } else if (authToken) {
+        setSyncResult({
+          type: 'success',
+          message: 'Connected (Free Tier)'
+        });
+      } else {
+        setSyncResult({
+          type: 'success',
+          message: 'Status checked (Free Tier)'
+        });
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Failed to connect to web app';
+      setSyncResult({
+        type: 'error',
+        message: msg
+      });
+    } finally {
+      setSyncing(false);
+      setTimeout(() => setSyncResult(null), 4000);
+    }
+  };
+
+  const isPaying = Boolean(subscription?.isPaying);
+  const currentPlan = subscription?.plan || 'free';
+  const expiresAt = subscription?.expiresAt ? new Date(subscription.expiresAt).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric'
+  }) : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', flex: '1', minHeight: '0', overflowY: 'auto', paddingRight: '2px' }}>
       
+      {/* Account & Subscription Section */}
+      <div className="glass" style={{ display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <User size={14} color="var(--primary)" />
+            <h4 style={{ fontSize: '13px', fontWeight: '700' }}>Account & Subscription</h4>
+          </div>
+          <span 
+            style={{ 
+              fontSize: '10px', 
+              fontWeight: '700',
+              padding: '2px 8px',
+              borderRadius: '9999px',
+              background: isPaying ? 'rgba(5, 150, 105, 0.12)' : 'rgba(15, 23, 42, 0.05)',
+              color: isPaying ? '#059669' : 'var(--text-muted)',
+              border: isPaying ? '1px solid rgba(5, 150, 105, 0.25)' : '1px solid rgba(15, 23, 42, 0.08)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px'
+            }}
+          >
+            {isPaying ? <Sparkles size={10} color="#059669" /> : null}
+            {isPaying ? `${currentPlan.toUpperCase()} ACTIVE` : 'FREE PLAN'}
+          </span>
+        </div>
+
+        <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {/* Plan Status Banner */}
+          <div 
+            style={{ 
+              padding: '12px', 
+              borderRadius: '10px', 
+              background: isPaying ? 'rgba(5, 150, 105, 0.06)' : 'rgba(15, 23, 42, 0.02)',
+              border: isPaying ? '1px solid rgba(5, 150, 105, 0.2)' : '1px solid var(--border-color)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between'
+            }}
+          >
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: '700', color: isPaying ? '#059669' : 'var(--text-primary)' }}>
+                {isPaying ? `${currentPlan.toUpperCase()} Member` : 'Free Tier'}
+              </div>
+              <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                {isPaying && expiresAt 
+                  ? `Renews / valid until ${expiresAt}`
+                  : isPaying
+                  ? 'Unlimited scanning active'
+                  : 'Standard offline heuristics enabled'}
+              </div>
+            </div>
+            
+            <div style={{ display: 'flex', gap: '6px' }}>
+              {isPaying ? (
+                <a
+                  href={`${webAppUrl}/account`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn-secondary"
+                  style={{ padding: '5px 10px', fontSize: '11px', textDecoration: 'none' }}
+                >
+                  <CreditCard size={12} />
+                  <span>Manage</span>
+                </a>
+              ) : (
+                <a
+                  href={`${webAppUrl}/pricing`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn-primary"
+                  style={{ padding: '5px 12px', fontSize: '11px', textDecoration: 'none' }}
+                >
+                  <Sparkles size={12} />
+                  <span>Upgrade</span>
+                </a>
+              )}
+            </div>
+          </div>
+
+          {/* Web App Pairing / Auth Token */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label style={{ fontSize: '11.5px', fontWeight: '600', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <Key size={12} />
+                <span>Web Account Token / License Key</span>
+              </label>
+              <a
+                href={`${webAppUrl}/account`}
+                target="_blank"
+                rel="noreferrer"
+                style={{ fontSize: '10.5px', color: 'var(--primary)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '3px' }}
+              >
+                <span>Get token from web</span>
+                <ExternalLink size={10} />
+              </a>
+            </div>
+
+            <input
+              type="password"
+              className="input-text"
+              placeholder="Paste Bearer session token or license key..."
+              value={authToken}
+              onChange={(e) => setAuthToken(e.target.value)}
+              style={{ fontSize: '11.5px' }}
+            />
+
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input
+                type="text"
+                className="input-text"
+                placeholder="Web App URL (e.g. http://localhost:3000)"
+                value={webAppUrl}
+                onChange={(e) => setWebAppUrl(e.target.value)}
+                style={{ fontSize: '11px', flex: '1' }}
+              />
+              <button
+                type="button"
+                onClick={handleSync}
+                disabled={syncing}
+                className="btn btn-secondary"
+                style={{ padding: '8px 12px', fontSize: '11px', whiteSpace: 'nowrap' }}
+              >
+                <RefreshCw size={11} className={syncing ? 'pulse-glow' : ''} />
+                <span>{syncing ? 'Checking...' : 'Check Status'}</span>
+              </button>
+            </div>
+
+            {syncResult && (
+              <div 
+                style={{ 
+                  fontSize: '11px', 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '6px',
+                  color: syncResult.type === 'success' ? 'var(--success)' : 'var(--danger)',
+                  marginTop: '2px'
+                }}
+              >
+                {syncResult.type === 'success' ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
+                <span>{syncResult.message}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Content Scanners */}
       <div className="glass" style={{ display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '8px' }}>
