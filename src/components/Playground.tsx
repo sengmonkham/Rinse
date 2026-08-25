@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import type { ChangeEvent } from 'react';
-import { Sparkles, FileText, Image as ImageIcon, Send, Trash2, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { Sparkles, FileText, Image as ImageIcon, Send, Trash2, ShieldAlert, ShieldCheck, Brain } from 'lucide-react';
 import type { AppSettings } from '../App';
 
 const humanizerDatabase: Record<string, { term: string; suggestions: string[]; explanation: string }> = {
@@ -104,6 +104,40 @@ interface ImageAnalysisResults {
   url: string;
 }
 
+interface StoryScopeDimension {
+  key: string;
+  name: string;
+  mean_assoc_ai: number;
+  train_mean_assoc_ai: number;
+  n_features: number;
+}
+
+interface StoryScopeTell {
+  feature: string;
+  dimension: string;
+  value: string;
+  p_ai_given_value: number;
+  ai_association: number;
+}
+
+interface StoryScopeResults {
+  score: number;
+  probability: number;
+  label: string;
+  engine: string;
+  mode?: string;
+  feature_source?: string;
+  model: string;
+  features_extracted: number;
+  features_total: number;
+  dimensions: StoryScopeDimension[];
+  top_tells: StoryScopeTell[];
+  warnings: string[];
+  reasons: string[];
+  latency_ms?: { feature_extraction?: number; classification?: number };
+  error?: string;
+}
+
 interface PlaygroundProps {
   settings?: AppSettings;
 }
@@ -114,6 +148,11 @@ export default function Playground({ settings }: PlaygroundProps) {
   // Text analysis states
   const [textVal, setTextVal] = useState('');
   const [textResults, setTextResults] = useState<TextAnalysisResults | null>(null);
+  const [storyScope, setStoryScope] = useState<{
+    loading: boolean;
+    results: StoryScopeResults | null;
+    error: string | null;
+  }>({ loading: false, results: null, error: null });
   
   // Image analysis states
   const [imgUrl, setImgUrl] = useState('');
@@ -128,6 +167,46 @@ export default function Playground({ settings }: PlaygroundProps) {
     if (!textToScan) return;
     setAnalyzing(true);
     setTextResults(null);
+    setStoryScope({ loading: false, results: null, error: null });
+
+    // Cloud mode: run the StoryScope narrative-feature detector. The server
+    // defaults to the offline rule-based engine (no API key needed); it uses
+    // the paper's LLM pipeline only when STORYSCOPE_MODE=llm is configured.
+    // Falls back to local heuristics on any failure.
+    const activeForStory = settings || {
+      enableTextScan: true, enableImageScan: true, enableVideoScan: true,
+      sensitivity: 50, showInlineBadges: true, autoImageOverlays: false,
+      showVibecodedAlert: false, apiMode: "local", apiUrl: "", apiKey: ""
+    };
+    if (activeForStory.apiMode === 'cloud') {
+      setStoryScope({ loading: true, results: null, error: null });
+      const base = (activeForStory.apiUrl || 'http://localhost:5001/predict').replace(/\/predict$/, '');
+      fetch(`${base}/predict/storyscope`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(activeForStory.apiKey ? { 'Authorization': `Bearer ${activeForStory.apiKey}` } : {})
+        },
+        body: JSON.stringify({ text: textToScan })
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(body.error || `Server returned status ${response.status}`);
+          }
+          return response.json();
+        })
+        .then((data) => {
+          setStoryScope({ loading: false, results: data as StoryScopeResults, error: null });
+        })
+        .catch((err) => {
+          setStoryScope({
+            loading: false,
+            results: null,
+            error: `StoryScope unavailable: ${err.message}. Check that server.py is running - the default offline engine needs no API key.`
+          });
+        });
+    }
 
     setTimeout(() => {
       setAnalyzing(false);
@@ -819,7 +898,7 @@ export default function Playground({ settings }: PlaygroundProps) {
             
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <button 
-                onClick={() => { setTextVal(''); setTextResults(null); }}
+                onClick={() => { setTextVal(''); setTextResults(null); setStoryScope({ loading: false, results: null, error: null }); }}
                 className="btn btn-secondary"
                 style={{ padding: '8px 12px' }}
                 disabled={analyzing || !textVal}
@@ -878,6 +957,83 @@ export default function Playground({ settings }: PlaygroundProps) {
                   <div>Perplexity consistency: <strong style={{ color: 'white' }}>{textResults.stats.perplexityScore}%</strong></div>
                 </div>
               </div>
+
+              {/* StoryScope narrative deep scan (cloud mode) */}
+              {storyScope.loading && (
+                <div className="glass scan-animation" style={{ padding: '14px', fontSize: '11.5px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Brain size={15} className="pulse-glow" color="var(--primary)" />
+                  <span>StoryScope narrative scan: reading plot structure, character agency and temporal shape...</span>
+                </div>
+              )}
+
+              {storyScope.error && !storyScope.loading && (
+                <div className="glass" style={{ padding: '12px', fontSize: '11px', color: 'var(--text-secondary)', borderLeft: '4px solid var(--warning, #f59e0b)' }}>
+                  <strong style={{ color: 'var(--text-primary)' }}>StoryScope (cloud):</strong> {storyScope.error}
+                </div>
+              )}
+
+              {storyScope.results && !storyScope.loading && (
+                <div className="glass" style={{ padding: '14px', borderLeft: `4px solid ${storyScope.results.score >= 50 ? 'var(--danger)' : 'var(--success)'}` }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Brain size={15} color="var(--primary)" />
+                      <span style={{ fontSize: '12px', fontWeight: '700' }}>StoryScope — Narrative Structure Analysis</span>
+                    </div>
+                    <span style={{ fontSize: '13px', fontWeight: '800', color: storyScope.results.score >= 50 ? 'var(--danger)' : 'var(--success)' }}>
+                      {storyScope.results.label}: {storyScope.results.score}%
+                    </span>
+                  </div>
+
+                  <div style={{ height: '6px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', overflow: 'hidden', marginBottom: '10px' }}>
+                    <div style={{ height: '100%', width: `${storyScope.results.score}%`, background: storyScope.results.score >= 50 ? 'var(--danger)' : 'var(--success)', borderRadius: '3px' }}></div>
+                  </div>
+
+                  <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+                    Detects AI fiction by plot structure, character agency and temporal shape rather than wording —
+                    {storyScope.results.features_extracted}/{storyScope.results.features_total} narrative features extracted
+                    <span style={{ color: 'var(--primary)', fontWeight: '600' }}> · {storyScope.results.feature_source === 'heuristic (rule-based, offline)' ? 'offline rule-based engine (no API)' : 'LLM annotation engine'}</span>
+                    {storyScope.results.latency_ms?.feature_extraction ? ` · extracted in ${storyScope.results.latency_ms.feature_extraction} ms` : ''}
+                    {storyScope.results.model ? ` · model ${storyScope.results.model.replace('.json', '')}` : ''}.
+                  </div>
+
+                  {storyScope.results.dimensions.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginBottom: '10px' }}>
+                      {storyScope.results.dimensions.slice(0, 6).map((d) => {
+                        const pct = Math.min(100, Math.max(4, Math.abs(d.mean_assoc_ai) * 600));
+                        const aiLeaning = d.mean_assoc_ai > 0.001;
+                        return (
+                          <div key={d.key} style={{ display: 'grid', gridTemplateColumns: '90px 1fr 40px', gap: '8px', alignItems: 'center', fontSize: '10px' }}>
+                            <span style={{ color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</span>
+                            <div style={{ height: '5px', background: 'rgba(255,255,255,0.06)', borderRadius: '3px', overflow: 'hidden' }}>
+                              <div style={{ height: '100%', width: `${pct}%`, background: aiLeaning ? 'var(--danger)' : 'var(--success)', borderRadius: '3px', opacity: 0.85 }}></div>
+                            </div>
+                            <span style={{ color: aiLeaning ? 'var(--danger)' : 'var(--success)', textAlign: 'right' }}>
+                              {aiLeaning ? 'AI' : 'Human'}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {storyScope.results.top_tells.length > 0 && (
+                    <div style={{ fontSize: '10.5px', color: 'var(--text-secondary)', background: 'rgba(0,0,0,0.15)', padding: '8px 10px', borderRadius: '8px', marginBottom: '8px' }}>
+                      <div style={{ fontWeight: '700', color: 'var(--text-primary)', marginBottom: '4px' }}>Strongest narrative tells</div>
+                      {storyScope.results.top_tells.slice(0, 4).map((t, i) => (
+                        <div key={i} style={{ marginBottom: '2px' }}>
+                          <span style={{ color: 'var(--danger)' }}>▸</span> {t.feature} = <em>{t.value}</em> ({Math.round(t.p_ai_given_value * 100)}% of such stories are AI)
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {storyScope.results.warnings && storyScope.results.warnings.length > 0 && (
+                    <div style={{ fontSize: '10px', color: 'var(--warning, #f59e0b)', marginBottom: '6px' }}>
+                      {storyScope.results.warnings.join(' ')}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="glass" style={{ padding: '12px' }}>
                 <h4 style={{ fontSize: '12px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '8px', fontWeight: '700' }}>

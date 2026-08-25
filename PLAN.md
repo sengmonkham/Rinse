@@ -1,10 +1,10 @@
-# Detoxify — Web App & Paid-Status Plan
+# RINSE — Web App & Paid-Status Plan
 
 ## Locked decisions
 
 | Area | Decision |
 |---|---|
-| Repo | **New separate repo `detoxify-web`** — this repo stays pure Chrome extension + AI server |
+| Repo | **New separate repo `rinse-web`** — this repo stays pure Chrome extension + AI server |
 | Web app | Next.js (App Router) + TypeScript, deployed to Vercel |
 | Database | **Neon** (serverless Postgres) — 0.5 GB storage / 100 CU-hr free tier, scale-to-zero |
 | Auth | **Better Auth** — users, sessions, accounts natively in Neon Postgres (email + Google OAuth) |
@@ -15,7 +15,7 @@
 ## Architecture
 
 ```
-┌─ Chrome Extension (this repo) ─────┐     ┌─ NEW REPO: detoxify-web (Next.js) ─────────────┐
+┌─ Chrome Extension (this repo) ─────┐     ┌─ NEW REPO: rinse-web (Next.js) ────────────────┐
 │  popup/dashboard (React)           │     │  /  /pricing  /sign-in  /account (landing+login)│
 │  Settings: "Account" card          │────▶│  /api/v1/me            /api/webhooks/dodo       │
 │  background.js: paid-status check  │     │  Better Auth (sessions in Neon)                 │
@@ -63,10 +63,10 @@ create table subscriptions (
 
 Better Auth adds its own tables (`user`, `session`, `account`, `verification`) via its schema adapter.
 
-## New repo (`detoxify-web`) structure
+## New repo (`rinse-web`) structure
 
 ```
-detoxify-web/
+rinse-web/
 ├─ app/
 │  ├─ page.tsx                    # landing: hero, features, how-it-works
 │  ├─ pricing/page.tsx            # Free vs Pro, upgrade → /api/checkout
@@ -85,13 +85,13 @@ detoxify-web/
 
 ## This repo (extension) changes
 
-- **`src/components/Settings.tsx`** — add "Account" card: sign-in state, Free/Pro badge, plan expiry, "Manage subscription" deep-link to `detoxify-web` account page.
+- **`src/components/Settings.tsx`** — add "Account" card: sign-in state, Free/Pro badge, plan expiry, "Manage subscription" deep-link to `rinse-web` account page.
 - **`public/background.js`** — on install + `chrome.alarms` periodic check: call `/api/v1/me` with cached token, store `{ isPaying, plan, expiresAt }` in `chrome.storage.local`; expose via runtime message for the popup.
 - **No feature gating yet** — plumbing and status display only (paywall decided later).
 
 ## Execution order
 
-1. Scaffold `detoxify-web`: Next.js + TS, Neon project + migration, Better Auth (email + Google OAuth).
+1. Scaffold `rinse-web`: Next.js + TS, Neon project + migration, Better Auth (email + Google OAuth).
 2. Landing page (`/`, `/pricing`) with the extension's dark glassy aesthetic.
 3. Sign-in + protected `/account`.
 4. Dodo checkout + `/api/webhooks/dodo` + `/api/v1/me`.

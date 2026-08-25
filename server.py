@@ -1,6 +1,4 @@
 import os
-import io
-import re
 import hmac
 import tempfile
 import base64
@@ -8,6 +6,14 @@ from urllib.parse import urlparse
 
 import requests
 from PIL import Image, ImageFilter
+
+# numpy is optional; used only by _pixel_forensics for accelerated stats.
+try:
+    import numpy as np
+    _NUMPY_AVAILABLE = True
+except ImportError:
+    np = None  # type: ignore[assignment]
+    _NUMPY_AVAILABLE = False
 
 try:
     from flask import Flask, request, jsonify
@@ -96,8 +102,9 @@ def _pixel_forensics(img_path):
     large perfectly-flat regions. Returns stats + a conservative score boost,
     or None when the analysis can't run.
     """
+    if not _NUMPY_AVAILABLE:
+        return None
     try:
-        import numpy as np
         with Image.open(img_path) as img:
             img = img.convert("RGB")
             w, h = img.size
@@ -318,7 +325,7 @@ def predict():
                 if parsed.scheme not in ("http", "https"):
                     return jsonify({"error": "Invalid image URL: only http(s) sources are allowed."}), 400
                 # Download image from URL with a size cap
-                headers = {"User-Agent": "DetoxifyAuthenticityDetector/1.0"}
+                headers = {"User-Agent": "RINSEAuthenticityDetector/1.0"}
                 resp = requests.get(image_url, headers=headers, timeout=15, stream=True)
                 resp.raise_for_status()
                 total = 0
@@ -396,9 +403,111 @@ def predict():
             except Exception:
                 pass
 
+# ---------------------------------------------------------------------------
+# StoryScope: narrative-feature AI fiction detection
+#
+# Implements the detection pipeline from Russell et al. (2026),
+# "StoryScope: Investigating idiosyncrasies in AI fiction" (arXiv:2604.03136):
+# 304 discourse-level narrative features are extracted from the story and
+# classified by an XGBoost model trained on the paper's released feature
+# matrix (61,575 stories). The classifier runs through a dependency-free
+# pure-Python scorer.
+#
+# Two extraction engines (STORYSCOPE_MODE, or per-request "mode" field):
+#
+#   heuristic (default): pure rule-based analysis of the text. No API key,
+#       no network - runs in milliseconds. Slightly lower accuracy.
+#   llm: the paper's original pipeline - an LLM annotates the story (10
+#       per-dimension calls). Requires an API key.
+#
+# Server-side config (environment variables):
+#   STORYSCOPE_MODE          heuristic (default) | llm
+#   STORYSCOPE_LLM_PROVIDER  openai (default) | anthropic | gemini   (llm mode)
+#   STORYSCOPE_LLM_MODEL     model id (provider default if unset)    (llm mode)
+#   STORYSCOPE_LLM_API_KEY   falls back to OPENAI/ANTHROPIC/GOOGLE key (llm mode)
+#   STORYSCOPE_LLM_BASE_URL  OpenAI-compatible base URL (llm mode)
+#   STORYSCOPE_MAX_CHARS     optional story truncation (default 280000)
+
+STORYSCOPE_AVAILABLE = False
+STORYSCOPE_ERROR = None
+try:
+    from storyscope.detect import detect as storyscope_detect
+    from storyscope.llm import get_config as storyscope_llm_config
+    STORYSCOPE_AVAILABLE = True
+except Exception as e:  # noqa: BLE001
+    STORYSCOPE_ERROR = str(e)
+
+
+def _storyscope_mode(request_data: dict) -> str:
+    """Resolve extraction engine: per-request 'mode', else STORYSCOPE_MODE env."""
+    mode = (request_data.get("mode") or os.environ.get("STORYSCOPE_MODE", "heuristic")).lower().strip()
+    return mode if mode in ("heuristic", "llm") else "heuristic"
+
+
+def _storyscope_ready(mode: str):
+    """Return (ok, error_message). Heuristic mode needs only the package;
+    llm mode additionally requires an LLM API key."""
+    if not STORYSCOPE_AVAILABLE:
+        return False, f"StoryScope module unavailable: {STORYSCOPE_ERROR}"
+    if mode == "llm":
+        try:
+            storyscope_llm_config()
+            return True, ""
+        except Exception as e:  # noqa: BLE001
+            return False, str(e)
+    return True, ""
+
+
+@app.route("/predict/storyscope", methods=["POST"])
+def predict_storyscope():
+    """AI-fiction detection via the StoryScope narrative-feature pipeline.
+
+    Default engine is the offline rule-based extractor (no API key needed).
+    Pass {"mode": "llm"} (or set STORYSCOPE_MODE=llm) for the paper's LLM
+    annotation pipeline.
+    """
+    if not _check_auth():
+        return jsonify({"error": "Unauthorized: missing or invalid Bearer token."}), 401
+
+    data = request.get_json() or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "No text provided. Send JSON body: {\"text\": \"...\"}"}), 400
+
+    mode = _storyscope_mode(data)
+    ok, err = _storyscope_ready(mode)
+    if not ok:
+        return jsonify({
+            "error": err,
+            "hint": "Heuristic mode needs no configuration. For LLM mode set "
+                    "STORYSCOPE_LLM_API_KEY (or OPENAI_API_KEY / ANTHROPIC_API_KEY / "
+                    "GOOGLE_API_KEY) and STORYSCOPE_LLM_PROVIDER on the server."
+        }), 503
+
+    try:
+        max_chars = data.get("max_chars") or int(os.environ.get("STORYSCOPE_MAX_CHARS", "280000"))
+        result = storyscope_detect(text, max_chars=int(max_chars), mode=mode)
+        print(f"StoryScope[{mode}]: text={len(text)} chars -> score={result['score']} "
+              f"({result['label']}), features={result['features_extracted']}/{result['features_total']}")
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 422
+    except Exception as e:  # noqa: BLE001
+        print(f"StoryScope error: {e}")
+        return jsonify({"error": f"StoryScope analysis failed: {e}"}), 500
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    print(f"Starting Detoxify Cloud Detector server on port {port}...")
+    print(f"Starting RINSE Cloud Detector server on port {port}...")
     if API_KEY:
         print("Bearer-token authentication is enabled (API_KEY is set).")
+    if STORYSCOPE_AVAILABLE:
+        mode = os.environ.get("STORYSCOPE_MODE", "heuristic")
+        print(f"StoryScope narrative detector loaded (text AI-detection endpoint: "
+              f"/predict/storyscope, engine: {mode}).")
+        if mode == "llm":
+            print("  LLM feature extraction requires STORYSCOPE_LLM_API_KEY (see README).")
+        else:
+            print("  Offline rule-based feature extraction - no API key needed.")
     app.run(host="0.0.0.0", port=port, debug=False)

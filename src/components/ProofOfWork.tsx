@@ -168,11 +168,11 @@ export default function ProofOfWork() {
 
   // Export proof report as a JSON activity log with a checksum (not a cryptographic signature)
   const handleExportCertificate = async () => {
-    const certificateId = `DETOXIFY-POW-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+    const certificateId = `RINSE-POW-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
     const reportData = {
       certificateId: certificateId,
       exportedAt: new Date().toISOString(),
-      documentTitle: `Detoxify Proof-of-Work Report`,
+      documentTitle: `RINSE Proof-of-Work Report`,
       textSummary: {
         totalCharacters: editorText.length,
         totalWords: editorText.split(/\s+/).filter(w => w.length > 0).length,
@@ -204,7 +204,7 @@ export default function ProofOfWork() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `detoxify-pow-certificate-${certificateId.toLowerCase()}.json`;
+    link.download = `rinse-pow-certificate-${certificateId.toLowerCase()}.json`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -251,7 +251,7 @@ export default function ProofOfWork() {
 
           <textarea
             className="input-textarea"
-            placeholder="Type your article here directly... Detoxify will track your typing cadence, deletions, and copy-paste chunks to verify human authorship and generate an authenticity report."
+            placeholder="Type your article here directly... RINSE will track your typing cadence, deletions, and copy-paste chunks to verify human authorship and generate an authenticity report."
             value={editorText}
             onChange={(e) => setEditorText(e.target.value)}
             onKeyDown={handleKeyDown}

@@ -1,8 +1,8 @@
-// Detoxify - Background Service Worker
+// RINSE - Background Service Worker
 
 // Initialize state and listeners
 chrome.runtime.onInstalled.addListener(() => {
-  console.log("Detoxify Content Authenticity Detector extension installed.");
+  console.log("RINSE (Remove Inauthentic Noise) extension installed.");
   
   // Set default settings if not already set
   chrome.storage.local.get(["settings"], (result) => {
@@ -27,13 +27,13 @@ chrome.runtime.onInstalled.addListener(() => {
 
   // Create context menu entries
   chrome.contextMenus.create({
-    id: "detoxifyScanSelectedText",
+    id: "rinseScanSelectedText",
     title: "Scan selection for AI patterns",
     contexts: ["selection"]
   });
 
   chrome.contextMenus.create({
-    id: "detoxifyScanSelectedImage",
+    id: "rinseScanSelectedImage",
     title: "Scan image for AI markers",
     contexts: ["image"]
   });
@@ -43,12 +43,12 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab || !tab.id) return;
   
-  if (info.menuItemId === "detoxifyScanSelectedText") {
+  if (info.menuItemId === "rinseScanSelectedText") {
     chrome.tabs.sendMessage(tab.id, {
       action: "scanSelectedText",
       text: info.selectionText
     });
-  } else if (info.menuItemId === "detoxifyScanSelectedImage") {
+  } else if (info.menuItemId === "rinseScanSelectedImage") {
     chrome.tabs.sendMessage(tab.id, {
       action: "scanSelectedImage",
       url: info.srcUrl

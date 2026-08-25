@@ -1,4 +1,4 @@
-// Detoxify - Content Script for Webpage DOM Injection
+// RINSE - Content Script for Webpage DOM Injection
 
 // Global state for scanning
 let scanResults = {
@@ -35,7 +35,7 @@ const injectStyles = () => {
   const style = document.createElement("style");
   style.id = "aegis-styles";
   style.textContent = `
-    /* Detoxify Badge Styling */
+    /* RINSE Badge Styling */
     .aegis-badge {
       display: inline-flex;
       align-items: center;
@@ -1580,7 +1580,7 @@ const openDiagnosticDrawer = (item, type) => {
   shield.style.color = item.score >= 60 ? "#EF4444" : "#F59E0B";
   shield.textContent = "🛡️";
   const titleText = document.createElement("span");
-  titleText.textContent = "Detoxify Inspector";
+  titleText.textContent = "RINSE Inspector";
   title.appendChild(shield);
   title.appendChild(titleText);
   const closeBtn = document.createElement("button");
@@ -1749,7 +1749,7 @@ const showDiagnosticFloatingTooltip = (data, x, y) => {
   footer.style.cssText = "display:flex; justify-content:space-between; align-items:center; margin-top:8px; border-top:1px solid rgba(255,255,255,0.05); padding-top:6px;";
   const brand = document.createElement("span");
   brand.style.cssText = "font-size:8px; color:#64748B;";
-  brand.textContent = "DETOXIFY ON-DEMAND";
+  brand.textContent = "RINSE ON-DEMAND";
   const closeBtn = document.createElement("button");
   closeBtn.id = "aegis-tooltip-close-btn";
   closeBtn.style.cssText = "background:none; border:none; color:#94A3B8; font-size:9px; cursor:pointer; font-weight:700;";

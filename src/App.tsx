@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { 
   Shield, 
   FileText, 
@@ -73,15 +73,19 @@ const DEFAULT_SETTINGS: AppSettings = {
   apiKey: ""
 };
 
+// Computed once at module load — never changes during the session.
+const IS_CHROME_EXT: boolean =
+  typeof window !== 'undefined' &&
+  typeof (window as typeof window & { chrome?: { runtime?: { id?: string } } }).chrome !== 'undefined' &&
+  typeof chrome.runtime !== 'undefined' &&
+  typeof chrome.runtime.id !== 'undefined';
+
+const IS_STANDALONE = !IS_CHROME_EXT;
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'inspector' | 'playground' | 'history' | 'settings' | 'pow'>('dashboard');
-  const [isStandalone] = useState(() => {
-    const hasChrome = typeof window !== "undefined" &&
-      typeof window.chrome !== "undefined" &&
-      typeof chrome.runtime !== "undefined" &&
-      typeof chrome.runtime.id !== "undefined";
-    return !hasChrome;
-  });
+  // isStandalone derived from module-level constant — no re-computation needed
+  const isStandalone = IS_STANDALONE;
   const [currentUrl, setCurrentUrl] = useState("Local Dashboard Preview");
   const [currentTitle, setCurrentTitle] = useState("Standalone Simulator");
   const [scanning, setScanning] = useState(false);
@@ -102,7 +106,7 @@ export default function App() {
 
   const [settings, setSettings] = useState<AppSettings>(() => {
     if (typeof window === "undefined") return DEFAULT_SETTINGS;
-    const saved = localStorage.getItem("aegis_settings");
+    const saved = localStorage.getItem("rinse_settings");
     if (saved) {
       try {
         return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
@@ -115,7 +119,7 @@ export default function App() {
 
   const [scanHistory, setScanHistory] = useState<ScanHistoryEntry[]>(() => {
     if (typeof window === "undefined") return [];
-    const saved = localStorage.getItem("aegis_history");
+    const saved = localStorage.getItem("rinse_history");
     if (saved) {
       try {
         return JSON.parse(saved) as ScanHistoryEntry[];
@@ -129,9 +133,7 @@ export default function App() {
 
   // Detect mode & initialize
   useEffect(() => {
-    const isChromeExt = typeof window !== "undefined" && typeof window.chrome !== "undefined" && typeof chrome.runtime !== "undefined" && typeof chrome.runtime.id !== "undefined";
-    
-    if (isChromeExt) {
+    if (IS_CHROME_EXT) {
       // 1. Get current active tab info
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs: ChromeTabInfo[]) => {
         const tab = tabs[0];
@@ -186,9 +188,9 @@ export default function App() {
   }, []);
 
   // Update Settings
-  const handleSaveSettings = (newSettings: AppSettings) => {
+  const handleSaveSettings = useCallback((newSettings: AppSettings) => {
     setSettings(newSettings);
-    if (!isStandalone) {
+    if (!IS_STANDALONE) {
       chrome.storage.local.set({ settings: newSettings });
       // Notify active tab content script of updated settings
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs: ChromeTabInfo[]) => {
@@ -198,16 +200,16 @@ export default function App() {
         }
       });
     } else {
-      localStorage.setItem("aegis_settings", JSON.stringify(newSettings));
+      localStorage.setItem("rinse_settings", JSON.stringify(newSettings));
     }
-  };
+  }, []);
 
   // Trigger quick page scan
-  const triggerScan = () => {
+  const triggerScan = useCallback(() => {
     if (scanning) return;
     setScanning(true);
     
-    if (!isStandalone) {
+    if (!IS_STANDALONE) {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs: ChromeTabInfo[]) => {
         const tab = tabs[0];
         if (tab && tab.id) {
@@ -235,17 +237,17 @@ export default function App() {
     } else {
       setTimeout(() => {
         setScanning(false);
-        alert("Please load Detoxify as an unpacked Chrome Extension to scan active webpages. For quick tests, use the 'Sandbox' tab!");
+        alert("Please load RINSE as an unpacked Chrome Extension to scan active webpages. For quick tests, use the 'Sandbox' tab!");
       }, 500);
     }
-  };
+  }, [scanning, settings.enableTextScan, settings.enableImageScan, settings.enableVideoScan]);
 
   // Trigger visual deep scan laser animation
-  const triggerDeepScan = () => {
+  const triggerDeepScan = useCallback(() => {
     if (scanning) return;
     setScanning(true);
 
-    if (!isStandalone) {
+    if (!IS_STANDALONE) {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs: ChromeTabInfo[]) => {
         const tab = tabs[0];
         if (tab && tab.id) {
@@ -267,16 +269,16 @@ export default function App() {
     } else {
       setTimeout(() => {
         setScanning(false);
-        alert("Please load Detoxify as an unpacked Chrome Extension to run deep visual scans on web tabs.");
+        alert("Please load RINSE as an unpacked Chrome Extension to run deep visual scans on web tabs.");
       }, 500);
     }
-  };
+  }, [scanning]);
 
   // Toggle hiding AI generated content
-  const handleToggleHideAI = () => {
-    if (isStandalone) {
-      alert("Please load Detoxify as an unpacked Chrome Extension to toggle content visibility.");
-      setAiHidden(!aiHidden);
+  const handleToggleHideAI = useCallback(() => {
+    if (IS_STANDALONE) {
+      alert("Please load RINSE as an unpacked Chrome Extension to toggle content visibility.");
+      setAiHidden(prev => !prev);
       return;
     }
     const nextHidden = !aiHidden;
@@ -290,19 +292,19 @@ export default function App() {
         });
       }
     });
-  };
+  }, [aiHidden]);
 
   // Clear history items
-  const handleClearHistory = () => {
-    if (!isStandalone) {
+  const handleClearHistory = useCallback(() => {
+    if (!IS_STANDALONE) {
       chrome.storage.local.set({ scanHistory: [] }, () => {
         setScanHistory([]);
       });
     } else {
       setScanHistory([]);
-      localStorage.removeItem("aegis_history");
+      localStorage.removeItem("rinse_history");
     }
-  };
+  }, []);
 
   return (
     <div className={`app-container glass ${isStandalone ? 'standalone-layout' : 'popup-mode'}`}>
@@ -313,8 +315,8 @@ export default function App() {
             <Shield size={18} color="#070a13" style={{ fill: "#070a13" }} />
           </div>
           <div>
-            <h1 className="logo-text">DETOXIFY</h1>
-            <p style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>AI Content Verifier</p>
+            <h1 className="logo-text">RINSE</h1>
+            <p style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Remove Inauthentic Noise</p>
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -332,7 +334,7 @@ export default function App() {
         <div className="glass" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px', borderLeft: '4px solid var(--primary)' }}>
           <h4 style={{ fontSize: '13px', fontWeight: '700', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Sparkles size={14} color="var(--primary)" />
-            <span>Load Detoxify as a Chrome Extension</span>
+            <span>Load RINSE as a Chrome Extension</span>
           </h4>
           <p style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
             To scan live webpages and use right-clicks or keyboard shortcut tracking, build and load the unpacked extension:

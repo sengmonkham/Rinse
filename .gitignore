@@ -26,3 +26,7 @@ dist-ssr
 # ML Models & Local Data
 .detectzoo_data/
 
+# Python
+__pycache__/
+*.pyc
+

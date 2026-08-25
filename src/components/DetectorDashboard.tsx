@@ -209,7 +209,7 @@ export default function DetectorDashboard({ scanResults, scanning, onScanQuick, 
       {/* Quick guide */}
       <div style={{ display: 'flex', gap: '8px', padding: '0 4px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: '1.4' }}>
         <HelpCircle size={14} style={{ flexShrink: 0 }} />
-        <span>Detoxify injects overlays onto suspected blocks in real-time. Hover/click tags directly on the webpage to inspect EXIF markers or text heuristics.</span>
+        <span>RINSE injects overlays onto suspected blocks in real-time. Hover/click tags directly on the webpage to inspect EXIF markers or text heuristics.</span>
       </div>
 
     </div>

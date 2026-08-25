@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Detoxify - AI Content Authenticity Detector",
+  "name": "RINSE - Remove Inauthentic Noise",
   "version": "1.0.0",
-  "description": "Real-time AI detector for web text, images, and video content. Scans websites and displays confidence scores.",
+  "description": "RINSE (Remove Inauthentic Noise) — Real-time AI detector for web text, images, and video content. Scans websites and displays confidence scores.",
   "permissions": [
     "activeTab",
     "storage",

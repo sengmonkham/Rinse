@@ -220,7 +220,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
               <input
                 type="text"
                 className="input-text"
-                placeholder="https://api.detoxify.app/v1"
+                placeholder="https://api.rinse.app/v1"
                 value={apiUrl}
                 onChange={(e) => setApiUrl(e.target.value)}
                 style={{ fontSize: '11.5px' }}
@@ -233,6 +233,13 @@ export default function Settings({ settings, onSave }: SettingsProps) {
                 onChange={(e) => setApiKey(e.target.value)}
                 style={{ fontSize: '11.5px' }}
               />
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', lineHeight: 1.45 }}>
+                Text sandbox uses the <strong>StoryScope</strong> narrative detector (arXiv:2604.03136) via
+                <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 4px', borderRadius: '3px' }}> /predict/storyscope</code>.
+                The server runs an <strong>offline rule-based engine by default</strong> — no API key needed, ~10 ms per story.
+                For higher accuracy, set <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 4px', borderRadius: '3px' }}>STORYSCOPE_MODE=llm</code> and
+                <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 4px', borderRadius: '3px' }}>STORYSCOPE_LLM_API_KEY</code> (or OPENAI/ANTHROPIC/GOOGLE key) on the server.
+              </div>
             </div>
           )}
         </div>
