@@ -509,6 +509,220 @@ export default function Playground({ settings }: PlaygroundProps) {
         }
       }
 
+      // 11b. General AI Narrative / Personal Essay Patterns
+      // Catches AI-generated personal narratives, application essays, and reflective
+      // prose that lack the typical LinkedIn/corporate markers but still exhibit
+      // mechanical smoothness characteristic of LLM output.
+
+      // A. AI Transition Phrase Overuse — LLMs favor structured connectors to bridge
+      //    ideas. Humans use them occasionally; AI over-uses them.
+      const aiTransitions = [
+        // Formulaic temporal openers
+        { pattern: /\bBack in \d{4}\b/gi, label: "'Back in [year]' (formulaic temporal opener)" },
+        { pattern: /\bWhen I was\b/gi, label: "'When I was' (formulaic reminiscence opener)" },
+        { pattern: /\bGrowing up\b/gi, label: "'Growing up' (formulaic origin opener)" },
+        // Causal bridges
+        { pattern: /\bThis led me to\b/gi, label: "'This led me to' (formulaic causal bridge)" },
+        { pattern: /\bBecause of this\b/gi, label: "'Because of this' (formulaic causal bridge)" },
+        { pattern: /\bThat whole (?:experience|mess|thing) (?:taught|flipped|changed)\b/gi, label: "'That whole [X] taught/flipped' (template reflection)" },
+        { pattern: /\btaught me a big lesson\b/gi, label: "'taught me a big lesson' (template reflection)" },
+        { pattern: /\bcompletely changed my\b/gi, label: "'completely changed my' (formulaic transformation)" },
+        { pattern: /\bflipped my entire\b/gi, label: "'flipped my entire' (dramatic transformation cliché)" },
+        // Personal register tells
+        { pattern: /\bI do not want\b/gi, label: "'I do not want' (formal negation in personal register)" },
+        { pattern: /\bmy passion was always there\b/gi, label: "'my passion was always there' (AI resolution cliché)" },
+        { pattern: /\bThe passion was always there\b/gi, label: "'The passion was always there' (AI resolution cliché)" },
+        { pattern: /\bjust buried under\b/gi, label: "'just buried under' (formulaic emotional layering)" },
+        // Departure/return formula
+        { pattern: /\bwalked away from\b/gi, label: "'walked away from' (formulaic distancing)" },
+        { pattern: /\bbailed on\b/gi, label: "'bailed on' (overly dramatic causal attribution)" },
+        { pattern: /\bjust could not stay away\b/gi, label: "'just could not stay away' (formulaic turning point)" },
+        { pattern: /\bcouldn't stay away\b/gi, label: "'couldn't stay away' (formulaic turning point)" },
+        { pattern: /\bcould not stay away\b/gi, label: "'could not stay away' (formulaic turning point)" },
+        // Mission/resolution formula
+        { pattern: /\btruly matter\b/gi, label: "'truly matter' (AI intensifier phrase)" },
+        { pattern: /\btricked me\b/gi, label: "'tricked me' (overly dramatic causal attribution)" },
+        { pattern: /\bthe thing I loved (?:doing )?most\b/gi, label: "'the thing I loved [doing] most' (template phrasing)" },
+        { pattern: /\bI want to make.*stronger.*easier\b/gi, label: "'I want to make...stronger...easier' (template mission statement)" },
+        { pattern: /\bno one else gets? tricked\b/gi, label: "'no one else gets tricked' (template mission closure)" },
+        { pattern: /\bthe way I did\b/gi, label: "'the way I did' (template reflective closure)" },
+        { pattern: /\bI don't want anyone else\b/gi, label: "'I don't want anyone else' (template altruistic closure)" },
+        { pattern: /\bgetting fooled by\b/gi, label: "'getting fooled by' (dramatic victim framing)" },
+        { pattern: /\bThat matters to me\b/gi, label: "'That matters to me' (template emotional anchor)" },
+        { pattern: /\bmore than anything else\b/gi, label: "'more than anything else' (AI superlative intensifier)" },
+        { pattern: /\bchips? away at\b/gi, label: "'chips away at' (AI metaphor cliché)" },
+      ];
+      let transitionHits = 0;
+      const matchedTransitions: string[] = [];
+      aiTransitions.forEach(item => {
+        const matches = text.match(item.pattern);
+        if (matches) {
+          transitionHits += matches.length;
+          matchedTransitions.push(item.label);
+        }
+      });
+      if (transitionHits >= 3) {
+        score += 10 * Math.min(transitionHits, 6);
+        flags.push(`AI Narrative Transitions: ${transitionHits} formulaic connector phrases detected — LLMs over-use structured causal bridges to link ideas (${matchedTransitions.slice(0, 3).join('; ')}${matchedTransitions.length > 3 ? '...' : ''})`);
+      }
+
+      // B. Causal Connector Density — AI text chains cause-effect statements with
+      //    high frequency ('because', 'led to', 'so', 'taught me', 'resulted in').
+      const causalWords = text.toLowerCase().match(/\b(because|therefore|thus|hence|consequently|led to|resulted in|taught me|made me|caused me|this led|so I|so it)\b/g) || [];
+      const causalDensity = causalWords.length / Math.max(1, sentences.length);
+      if (causalDensity > 0.25 && sentences.length >= 3) {
+        score += 20;
+        flags.push(`AI Narrative Structure: High causal connector density (${causalWords.length} connectors across ${sentences.length} sentences) — AI chains cause-effect at an unnatural rate`);
+      } else if (causalDensity > 0.15 && sentences.length >= 5) {
+        score += 10;
+        flags.push(`AI Narrative Structure: Elevated causal connector density (${causalWords.length} connectors)`);
+      }
+
+      // C. Uniform Sentence Length (Burstiness) — Human writing alternates short
+      //    punchy sentences with longer complex ones. AI tends toward uniform length.
+      if (sentences.length >= 4) {
+        const wc = sentences.map(s => s.split(/\s+/).length);
+        const wordAvg = wc.reduce((a, b) => a + b, 0) / wc.length;
+        const maxDev = Math.max(...wc.map(w => Math.abs(w - wordAvg)));
+        const uniformity = maxDev / Math.max(1, wordAvg);
+        if (uniformity < 0.25) {
+          score += 20;
+          flags.push(`AI Narrative Cadence: Highly uniform sentence length (max deviation ${Math.round(uniformity * 100)}% from mean) — human writing varies sentence length dramatically`);
+        } else if (uniformity < 0.35) {
+          score += 10;
+          flags.push(`AI Narrative Cadence: Moderately uniform sentence length (max deviation ${Math.round(uniformity * 100)}% from mean)`);
+        }
+      }
+
+      // D. Template-like Emotional Progression — AI narratives follow a predictable
+      //    emotional arc: setup(fear/doubt) → struggle → return → resolution → mission.
+      //    Check for multiple arc-phase markers appearing in sequence.
+      const arcPhases = [
+        { pattern: /\b(scared|afraid|worried|doubt|fear|anxious|nervous|spooked)\b/gi, phase: "fear" },
+        { pattern: /\b(walked away|moved on|gave up|left|turned away|stepped away|bailed on|dead end)\b/gi, phase: "departure" },
+        { pattern: /\b(could not stay|came back|returned|started again|couldn't stay away|drew me back|couldn't stay away|messing around)\b/gi, phase: "return" },
+        { pattern: /\b(passion was always|always there|never left|always loved|deep down|just buried under)\b/gi, phase: "rediscovery" },
+        { pattern: /\b(changed my|transformed|lesson|taught me|big lesson|flipped my entire|career trajectory)\b/gi, phase: "lesson" },
+        { pattern: /\b(no one else|don't want anyone|prevent|stop|make sure|genuinely care|matters to me)\b/gi, phase: "mission" },
+      ];
+      const phasesFound = arcPhases.filter(p => p.pattern.test(text)).map(p => p.phase);
+      if (phasesFound.length >= 4) {
+        score += 25;
+        flags.push(`AI Narrative Arc: ${phasesFound.length}-phase template emotional arc detected (${phasesFound.join(' → ')}) — AI generates textbook problem→struggle→return→mission arcs`);
+      } else if (phasesFound.length >= 3) {
+        score += 12;
+        flags.push(`AI Narrative Arc: ${phasesFound.length}-phase emotional arc detected (${phasesFound.join(' → ')}) — common in AI-generated personal narratives`);
+      }
+
+      // E. Overly Smooth Sentence Openers — Humans vary sentence beginnings; AI
+      //    often uses pronoun-heavy, subject-first openings (I, My, This, That).
+      if (sentences.length >= 5) {
+        const openers = sentences.map(s => {
+          const w = s.split(/\s+/)[0]?.toLowerCase().replace(/[^a-z]/g, '');
+          return w || '';
+        }).filter(w => w.length > 0);
+        const pronounOpeners = openers.filter(w => ['i', 'my', 'this', 'that', 'still', 'however', 'because'].includes(w));
+        const pronounRatio = pronounOpeners.length / openers.length;
+        if (pronounRatio > 0.6) {
+          score += 15;
+          flags.push(`AI Narrative Voice: ${Math.round(pronounRatio * 100)}% of sentences open with pronouns or formulaic starters (I/My/This/That/Still/However) — humans vary openings more`);
+        }
+      }
+
+      // F. Perfect Grammar with Formal Register in Personal Text — AI-generated
+      //    personal narratives often use full contractions ('do not' vs 'don't')
+      //    and avoid contractions entirely in informal contexts.
+      const fullFormNegations = text.match(/\b(do not|does not|did not|cannot|could not|would not|should not|will not|have not|has not|had not|was not|were not|is not|are not)\b/gi) || [];
+      const contractions = text.match(/\b(don't|doesn't|didn't|can't|couldn't|wouldn't|shouldn't|won't|haven't|hasn't|hadn't|wasn't|weren't|isn't|aren't|I'm|I've|I'd|I'll)\b/gi) || [];
+      const isPersonalNarrative = /\bI (was|am|have|had|started|began|felt|wanted|loved|decided|learned|built|chose)\b/i.test(text);
+      if (isPersonalNarrative && fullFormNegations.length >= 3 && contractions.length <= fullFormNegations.length) {
+        score += 15;
+        flags.push(`AI Narrative Register: ${fullFormNegations.length} full-form negations ('do not', 'did not', etc.) vs ${contractions.length} contractions — AI over-formalizes personal narrative text`);
+      }
+
+      // G. Mechanical Smoothness — AI-generated personal narratives exhibit
+      //    unnaturally uniform paragraph lengths. Humans vary paragraph size
+      //    dramatically (1-sentence punch to 5+ sentence exposition).
+      if (paragraphs.length >= 3) {
+        const paraWordCounts = paragraphs.map(p => p.split(/\s+/).filter(w => w.length > 0).length);
+        const paraAvg = paraWordCounts.reduce((a, b) => a + b, 0) / paraWordCounts.length;
+        const paraMaxDev = Math.max(...paraWordCounts.map(w => Math.abs(w - paraAvg)));
+        const paraUniformity = paraMaxDev / Math.max(1, paraAvg);
+        if (paraUniformity < 0.30 && paragraphs.length >= 3) {
+          score += 20;
+          flags.push(`AI Mechanical Smoothness: Paragraphs are highly uniform in length (${Math.round(paraUniformity * 100)}% deviation from mean) — human writing varies paragraph size dramatically`);
+        }
+      }
+
+      // H. AI Personal Essay Template — Catches the specific formulaic
+      //    structure of AI-generated personal narratives: temporal opener →
+      //    fear/departure → return → resolution → altruistic mission.
+      const personalEssayTemplates = [
+        { pattern: /\bI (was|am) ready to\b/gi, label: "'I was/am ready to' (template setup opener)" },
+        { pattern: /\bI got (?:spooked|scared|worried|nervous|afraid)\b/gi, label: "'I got spooked' (formulaic fear attribution)" },
+        { pattern: /\bdecided .* was a dead end\b/gi, label: "'decided X was a dead end' (template abandonment)" },
+        { pattern: /\bSo I (?:bailed|left|walked|stepped)\b/gi, label: "'So I bailed/left' (formulaic departure)" },
+        { pattern: /\bstarted (?:messing|playing|tinkering) around\b/gi, label: "'started messing around' (formulaic return framing)" },
+        { pattern: /\bsomehow (?:landed|got|found)\b/gi, label: "'somehow landed/got' (formulaic serendipity)" },
+        { pattern: /\blanded (?:an )?internship\b/gi, label: "'landed internship' (template achievement)" },
+        { pattern: /\bThe passion was always there\b/gi, label: "'The passion was always there' (AI resolution cliché)" },
+        { pattern: /\bjust buried under\b/gi, label: "'just buried under' (formulaic emotional layering)" },
+        { pattern: /\bflipped my entire\b/gi, label: "'flipped my entire' (dramatic transformation cliché)" },
+        { pattern: /\bI don't want anyone else\b/gi, label: "'I don't want anyone else' (template altruistic closure)" },
+        { pattern: /\bgenuinely care\b/gi, label: "'genuinely care' (AI sincerity marker)" },
+        { pattern: /\bmore than anything else\b/gi, label: "'more than anything else' (AI superlative intensifier)" },
+        { pattern: /\bThat matters to me\b/gi, label: "'That matters to me' (template emotional anchor)" },
+        { pattern: /\bright now\b/gi, label: "'right now' (AI urgency qualifier)" },
+      ];
+      let templateHits = 0;
+      const matchedTemplates: string[] = [];
+      personalEssayTemplates.forEach(item => {
+        const matches = text.match(item.pattern);
+        if (matches) {
+          templateHits += matches.length;
+          matchedTemplates.push(item.label);
+        }
+      });
+      if (templateHits >= 4) {
+        score += 20;
+        flags.push(`AI Personal Essay Template: ${templateHits} formulaic personal narrative patterns detected — classic AI essay structure (${matchedTemplates.slice(0, 3).join('; ')}${matchedTemplates.length > 3 ? '...' : ''})`);
+      } else if (templateHits >= 2) {
+        score += 8;
+        flags.push(`AI Personal Essay Template: ${templateHits} template phrases detected (${matchedTemplates.slice(0, 2).join('; ')})`);
+      }
+
+      // I. Predictable Three-Act Structure — Short AI texts often pack a
+      //    clean problem→return→mission arc into 3 paragraphs.
+      if (paragraphs.length === 3) {
+        const p1Lower = paragraphs[0].toLowerCase();
+        const p2Lower = paragraphs[1].toLowerCase();
+        const p3Lower = paragraphs[2].toLowerCase();
+        const act1Setup = /\b(ready to|chose|decided|started|loved|wanted|planned)\b/.test(p1Lower);
+        const act1Fear = /\b(scared|afraid|spooked|worried|fear|dead end|bailed|left|walked)\b/.test(p1Lower);
+        const act2Return = /\b(came back|started|returned|couldn't stay|messing|tinkering|passion|always there|buried)\b/.test(p2Lower);
+        const act3Mission = /\b(don't want|make sure|care|matters|trust|everyone|no one else|genuinely)\b/.test(p3Lower);
+        if (act1Setup && act1Fear && act2Return && act3Mission) {
+          score += 18;
+          flags.push("AI Three-Act Micro-Arc: Clean setup→departure→return→mission in exactly 3 paragraphs — hallmark of AI-generated personal essays");
+        }
+      }
+
+      // J. AI Emotional Grandstanding — AI narratives often end with
+      //    sweeping altruistic statements that feel performative.
+      const grandstandingPatterns = [
+        /\b(?:I )?(?:genuinely |truly )?(?:care|believe|want|hope) .*(?:everyone|people|others|anyone|world)/i,
+        /\b(?:more than )?(?:anything|everything) else (?:right )?now\b/i,
+        /\b(?:doesn't|does not|don't|do not) (?:become|turn into|turn out) .*(?:harm|bad|dangerous)/i,
+        /\b(?:chips?|chipping) away at .*(?:trust|faith|belief)/i,
+        /\b(?:what )?(?:we (?:see|read|hear)|people (?:see|read|hear))/i,
+      ];
+      let grandstandHits = 0;
+      grandstandingPatterns.forEach(p => { if (p.test(text)) grandstandHits++; });
+      if (grandstandHits >= 2) {
+        score += 12;
+        flags.push(`AI Emotional Grandstanding: ${grandstandHits} sweeping altruistic/mission-bound statements detected — AI narratives end with performative moral positioning`);
+      }
+
       // 11. Humanizer Suggestions Scan
       const suggestionsList: HumanizerSuggestion[] = [];
       const lowerText = text.toLowerCase();
@@ -540,6 +754,32 @@ export default function Playground({ settings }: PlaygroundProps) {
             explanation: "AI copywriting style often breaks every sentence into its own line. Combining them into fuller paragraphs improves cadence and readability."
           });
         }
+      }
+
+      // Suggestions for general AI narrative patterns
+      if (transitionHits >= 3) {
+        suggestionsList.push({
+          id: "ai_transitions",
+          term: "Formulaic transition phrases",
+          suggestions: ["Remove or rephrase causal bridges", "Let cause-effect emerge implicitly"],
+          explanation: `AI over-uses structured connectors like 'This led me to', 'Because of this', and 'taught me a lesson'. Real writers let connections emerge from context instead of labeling every transition.`
+        });
+      }
+      if (causalDensity > 0.2) {
+        suggestionsList.push({
+          id: "causal_density",
+          term: "High causal connector density",
+          suggestions: ["Remove 'because', 'so', 'led to' from some sentences", "Let implications speak for themselves"],
+          explanation: `AI text chains cause and effect at an unnaturally high rate. Removing explicit causal connectors forces the reader to draw their own connections, which reads more naturally.`
+        });
+      }
+      if (isPersonalNarrative && fullFormNegations.length >= 3 && contractions.length <= fullFormNegations.length) {
+        suggestionsList.push({
+          id: "formal_register",
+          term: "Over-formal negations in personal text",
+          suggestions: ["Use contractions (don't, didn't, won't)", "Match register to context"],
+          explanation: `Using 'I do not want' instead of 'I don't want' in a personal essay creates an unnatural formality. Real people use contractions in informal or personal writing.`
+        });
       }
 
       // Capitalization & Grammar Checks (Human Indicators)
@@ -635,7 +875,7 @@ export default function Playground({ settings }: PlaygroundProps) {
     };
 
     if (activeSettings.apiMode === 'cloud') {
-      const base = (activeSettings.apiUrl || 'http://localhost:5000').replace(/\/predict(\/.*)?$/, '').replace(/\/$/, '');
+      const base = (activeSettings.apiUrl || 'http://localhost:5001').replace(/\/predict(\/.*)?$/, '').replace(/\/$/, '');
       const endpoint = `${base}/predict/image/${effectiveMode}`;
       
       fetch(endpoint, {
@@ -821,7 +1061,62 @@ export default function Playground({ settings }: PlaygroundProps) {
     }, 1200);
   };
 
-  const handleAnalyzeVideo = (overrideUrl?: string) => {
+  // Extract evenly-spaced frames from a video URL via <video> + canvas so the
+  // server can run real temporal-coherence analysis (Layer 5). Returns [] when
+  // the video can't be loaded or the canvas would be CORS-tainted.
+  const extractVideoFrames = (url: string, maxFrames = 12): Promise<string[]> =>
+    new Promise((resolve) => {
+      const video = document.createElement('video');
+      video.crossOrigin = 'anonymous';
+      video.muted = true;
+      video.preload = 'auto';
+      video.playsInline = true;
+      let settled = false;
+      const finish = (frames: string[]) => {
+        if (settled) return;
+        settled = true;
+        video.removeAttribute('src');
+        video.load();
+        resolve(frames);
+      };
+      const timeout = setTimeout(() => finish([]), 15000);
+
+      video.addEventListener('error', () => { clearTimeout(timeout); finish([]); });
+      video.addEventListener('loadeddata', async () => {
+        try {
+          let duration = video.duration;
+          if (!isFinite(duration) || duration <= 0) duration = 10; // streamed blobs report Infinity
+          const count = Math.max(3, Math.min(maxFrames, Math.floor(duration * 2) || maxFrames));
+          const scale = Math.min(1, 512 / Math.max(video.videoWidth || 512, video.videoHeight || 512));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(2, Math.round((video.videoWidth || 512) * scale));
+          canvas.height = Math.max(2, Math.round((video.videoHeight || 512) * scale));
+          const ctx = canvas.getContext('2d');
+          if (!ctx) { clearTimeout(timeout); finish([]); return; }
+
+          const frames: string[] = [];
+          for (let i = 0; i < count; i++) {
+            // Skip the first/last 5% where posters/black frames are common
+            const t = duration * (0.05 + (0.9 * i) / Math.max(1, count - 1));
+            await new Promise<void>((seeked) => {
+              const onSeek = () => { video.removeEventListener('seeked', onSeek); seeked(); };
+              video.addEventListener('seeked', onSeek);
+              video.currentTime = Math.min(t, Math.max(0, duration - 0.05));
+            });
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            frames.push(canvas.toDataURL('image/jpeg', 0.85));
+          }
+          clearTimeout(timeout);
+          finish(frames);
+        } catch {
+          clearTimeout(timeout);
+          finish([]); // likely CORS-tainted canvas
+        }
+      });
+      video.src = url;
+    });
+
+  const handleAnalyzeVideo = async (overrideUrl?: string) => {
     const targetUrl = overrideUrl || videoUrl || imgUrl;
     if (!targetUrl) return;
     setAnalyzing(true);
@@ -834,7 +1129,11 @@ export default function Playground({ settings }: PlaygroundProps) {
     };
 
     if (activeSettings.apiMode === 'cloud') {
-      const base = (activeSettings.apiUrl || 'http://localhost:5000').replace(/\/predict(\/.*)?$/, '').replace(/\/$/, '');
+      const base = (activeSettings.apiUrl || 'http://localhost:5001').replace(/\/predict(\/.*)?$/, '').replace(/\/$/, '');
+      // Sample real frames so the server can run temporal analysis. If the
+      // browser refuses (CORS / unsupported codec), fall back to single-frame
+      // mode and let the server say so instead of silently faking results.
+      const frames = await extractVideoFrames(targetUrl).catch(() => [] as string[]);
       fetch(`${base}/predict/video/deep`, {
         method: 'POST',
         headers: {
@@ -842,8 +1141,9 @@ export default function Playground({ settings }: PlaygroundProps) {
           ...(activeSettings.apiKey ? { 'Authorization': `Bearer ${activeSettings.apiKey}` } : {})
         },
         body: JSON.stringify({
-          image_url: targetUrl.startsWith('data:') ? null : targetUrl,
-          image_base64: targetUrl.startsWith('data:') ? targetUrl : null
+          frames_base64: frames.length > 0 ? frames : null,
+          image_url: frames.length > 0 || targetUrl.startsWith('data:') ? null : targetUrl,
+          image_base64: frames.length > 0 || !targetUrl.startsWith('data:') ? null : targetUrl
         })
       })
       .then(async (res) => {

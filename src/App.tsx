@@ -1,13 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { 
-  Shield, 
-  FileText, 
-  Settings as SettingsIcon, 
-  History as HistoryIcon, 
   Sparkles, 
   Globe,
-  RefreshCw,
-  Keyboard
+  RefreshCw
 } from 'lucide-react';
 import DetectorDashboard from './components/DetectorDashboard';
 import ContentList from './components/ContentList';
@@ -15,6 +10,10 @@ import Playground from './components/Playground';
 import PageHistory from './components/PageHistory';
 import Settings from './components/Settings';
 import ProofOfWork from './components/ProofOfWork';
+import Popup from './components/Popup';
+
+// Detect popup mode: Chrome extension popup appends #popup to the URL
+const IS_POPUP = typeof window !== 'undefined' && window.location.hash === '#popup';
 
 export interface ScanStats {
   textCount: number;
@@ -96,9 +95,12 @@ const IS_CHROME_EXT: boolean =
 const IS_STANDALONE = !IS_CHROME_EXT;
 
 export default function App() {
+  // Popup mode: render minimal toggle UI
+  if (IS_POPUP) {
+    return <Popup />;
+  }
+
   const [activeTab, setActiveTab] = useState<'dashboard' | 'inspector' | 'playground' | 'history' | 'settings' | 'pow'>('dashboard');
-  // isStandalone derived from module-level constant — no re-computation needed
-  const isStandalone = IS_STANDALONE;
   const [currentUrl, setCurrentUrl] = useState("Local Dashboard Preview");
   const [currentTitle, setCurrentTitle] = useState("Standalone Simulator");
   const [scanning, setScanning] = useState(false);
@@ -404,151 +406,79 @@ export default function App() {
   }, []);
 
   return (
-    <div className={`app-container glass ${isStandalone ? 'standalone-layout' : 'popup-mode'}`}>
+    <div className="dashboard-root">
       {/* Header */}
-      <header className="app-header">
-        <div className="logo-container">
-          <div className="logo-icon">
-            <Shield size={18} color="#070a13" style={{ fill: "#070a13" }} />
-          </div>
-          <div>
-            <h1 className="logo-text">RINSE</h1>
-            <p style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>Remove Inauthentic Noise</p>
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {subscription.isPaying ? (
-            <span 
-              className="badge-version" 
-              style={{ 
-                color: '#059669', 
-                background: 'rgba(5, 150, 105, 0.12)', 
-                border: '1px solid rgba(5, 150, 105, 0.3)',
-                fontWeight: 700,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '4px'
-              }}
-            >
-              <Sparkles size={10} color="#059669" />
+      <header className="dashboard-header">
+        <div className="dashboard-header-left">
+          <h1 className="dashboard-logo">RINSE</h1>
+          <span className="dashboard-badge">v1.0</span>
+          {subscription.isPaying && (
+            <span className="dashboard-badge dashboard-badge-pro">
+              <Sparkles size={10} />
               {subscription.plan.toUpperCase()}
             </span>
-          ) : (
-            <span 
-              className="badge-version" 
-              style={{ 
-                color: 'var(--text-muted)', 
-                background: 'rgba(15, 23, 42, 0.04)', 
-                border: '1px solid rgba(15, 23, 42, 0.08)',
-                fontWeight: 600
-              }}
-            >
-              FREE
-            </span>
           )}
-          {isStandalone && (
-            <span className="badge-version" style={{ color: '#06b6d4', background: 'rgba(6, 182, 212, 0.1)', border: '1px solid rgba(6, 182, 212, 0.2)' }}>
-              DEV SIMULATOR
-            </span>
+        </div>
+        <div className="dashboard-header-right">
+          {activeTab !== 'playground' && activeTab !== 'settings' && activeTab !== 'pow' && (
+            <div className="dashboard-page-info">
+              <Globe size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+              <span className="dashboard-page-title">{currentTitle}</span>
+              <button
+                onClick={triggerScan}
+                disabled={scanning || currentUrl === 'Chrome Internal Page'}
+                className="dashboard-scan-mini"
+                title="Scan page"
+              >
+                <RefreshCw size={12} className={scanning ? 'pulse-glow' : ''} />
+              </button>
+            </div>
           )}
-          <span className="badge-version">v1.0.0</span>
         </div>
       </header>
 
-      {/* Chrome Extension Load Guidelines */}
-      {isStandalone && activeTab !== 'playground' && activeTab !== 'settings' && activeTab !== 'pow' && (
-        <div className="glass" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px', borderLeft: '4px solid var(--primary)' }}>
-          <h4 style={{ fontSize: '13px', fontWeight: '700', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Sparkles size={14} color="var(--primary)" />
-            <span>Load RINSE as a Chrome Extension</span>
-          </h4>
-          <p style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: '1.4' }}>
-            To scan live webpages and use right-clicks or keyboard shortcut tracking, build and load the unpacked extension:
-          </p>
-          <ol style={{ fontSize: '11px', color: 'var(--text-secondary)', paddingLeft: '16px', lineHeight: '1.4', margin: '0' }}>
-            <li>Run <code>npm run build</code> in the project directory.</li>
-            <li>Go to <code>chrome://extensions</code> in your browser.</li>
-            <li>Turn on <strong>Developer mode</strong> (top-right toggle).</li>
-            <li>Click <strong>Load unpacked</strong> and select the <code>dist/</code> folder.</li>
-            <li>Hover element + press <strong>Control</strong> (or <strong>Option/Alt</strong>) on any webpage to scan locally!</li>
-          </ol>
-        </div>
-      )}
-
-      {/* Target Address Info */}
-      {activeTab !== 'playground' && activeTab !== 'settings' && activeTab !== 'pow' && (
-        <div className="glass" style={{ padding: '12px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{ background: 'rgba(255,255,255,0.03)', padding: '8px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-            <Globe size={18} className="glow-text" style={{ color: 'var(--primary)' }} />
-          </div>
-          <div style={{ overflow: 'hidden', flex: '1' }}>
-            <div style={{ fontSize: '13px', fontWeight: '700', color: 'var(--text-primary)', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
-              {currentTitle}
-            </div>
-            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
-              {currentUrl}
-            </div>
-          </div>
-          <button 
-            onClick={triggerScan}
-            disabled={scanning || currentUrl === "Chrome Internal Page"}
-            className="btn btn-secondary" 
-            style={{ padding: '8px', borderRadius: '8px' }}
-            title="Reload scanning"
-          >
-            <RefreshCw size={14} className={scanning ? 'pulse-glow' : ''} />
-          </button>
-        </div>
-      )}
-
       {/* Tab Navigation */}
-      <nav className="tab-navigation">
-        <button 
-          onClick={() => setActiveTab('dashboard')} 
-          className={`tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
+      <nav className="dashboard-tabs">
+        <button
+          onClick={() => setActiveTab('dashboard')}
+          className={`dashboard-tab ${activeTab === 'dashboard' ? 'active' : ''}`}
         >
-          <Shield size={14} />
-          <span>Dashboard</span>
+          Dashboard
         </button>
-        <button 
-          onClick={() => setActiveTab('inspector')} 
-          className={`tab-btn ${activeTab === 'inspector' ? 'active' : ''}`}
+        <button
+          onClick={() => setActiveTab('inspector')}
+          className={`dashboard-tab ${activeTab === 'inspector' ? 'active' : ''}`}
         >
-          <FileText size={14} />
-          <span>Matches</span>
+          Matches
         </button>
-        <button 
-          onClick={() => setActiveTab('playground')} 
-          className={`tab-btn ${activeTab === 'playground' ? 'active' : ''}`}
+        <button
+          onClick={() => setActiveTab('playground')}
+          className={`dashboard-tab ${activeTab === 'playground' ? 'active' : ''}`}
         >
-          <Sparkles size={14} />
-          <span>Sandbox</span>
+          Sandbox
         </button>
-        <button 
-          onClick={() => setActiveTab('pow')} 
-          className={`tab-btn ${activeTab === 'pow' ? 'active' : ''}`}
+        <button
+          onClick={() => setActiveTab('pow')}
+          className={`dashboard-tab ${activeTab === 'pow' ? 'active' : ''}`}
         >
-          <Keyboard size={14} />
-          <span>Writer POW</span>
+          Writer POW
         </button>
-        <button 
-          onClick={() => setActiveTab('history')} 
-          className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
+        <button
+          onClick={() => setActiveTab('history')}
+          className={`dashboard-tab ${activeTab === 'history' ? 'active' : ''}`}
         >
-          <HistoryIcon size={14} />
-          <span>History</span>
+          History
         </button>
-        <button 
-          onClick={() => setActiveTab('settings')} 
-          className={`tab-btn ${activeTab === 'settings' ? 'active' : ''}`}
+        <button
+          onClick={() => setActiveTab('settings')}
+          className={`dashboard-tab ${activeTab === 'settings' ? 'active' : ''}`}
         >
-          <SettingsIcon size={14} />
-          <span>Settings</span>
+          Settings
         </button>
       </nav>
 
       {/* Active Tab View */}
-      <main style={{ flex: '1', minHeight: '0', display: 'flex', flexDirection: 'column' }}>
+      <main className="dashboard-content">
         {activeTab === 'dashboard' && (
           <DetectorDashboard 
             scanResults={scanResults} 

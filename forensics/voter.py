@@ -68,6 +68,22 @@ def fuse_ensemble_verdict(
     if c2pa_val is not None and c2pa_val <= 5:
         raw_score = min(raw_score, 12.0)
 
+    # 3. Strong-evidence escalation.
+    # A plain weighted average lets a single overconfident (or blind-spot-hit)
+    # layer bury a highly confident forensic signature - e.g. clear GAN grid
+    # peaks / spectral deficits (frequency >= 75) scored against CNNSpot models
+    # that are known to fail on small recompressed thumbnails. When any layer
+    # is strongly confident the media is synthetic AND no hard authenticity
+    # override fired above, floor the fused score into at least the suspicious
+    # band instead of letting the average wash it out.
+    strongest = max(available.values())
+    authenticity_override = c2pa_val is not None and c2pa_val <= 5
+    if not authenticity_override:
+        if strongest >= 85:
+            raw_score = max(raw_score, min(strongest, 82.0))
+        elif strongest >= 70:
+            raw_score = max(raw_score, 62.0)
+
     final_score = int(round(min(99, max(1, raw_score))))
 
     # Determine confidence tier
@@ -80,6 +96,14 @@ def fuse_ensemble_verdict(
         confidence = "MEDIUM"
     else:
         confidence = "LOW"
+
+    # Layers disagree sharply about synthetic origin (one very high, another
+    # very low): downgrade confidence so the UI communicates uncertainty even
+    # when the escalated score lands in a decisive tier.
+    confident_scores = [v for v in available.values() if v is not None]
+    if len(confident_scores) >= 2 and max(confident_scores) - min(confident_scores) >= 55:
+        if confidence == "HIGH":
+            confidence = "MEDIUM"
 
     # Determine qualitative classification tier
     if final_score >= 80:

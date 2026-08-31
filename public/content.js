@@ -23,6 +23,21 @@ let floatingTooltipElement = null;
 // Sensitivity from settings (10-90), used to tune the text flagging threshold
 let scanSensitivity = 50;
 
+// Extension enabled state — when false, scanning and badges are suppressed
+let extensionEnabled = true;
+
+// Keep extensionEnabled in sync with chrome.storage.local so that
+// toggling from the popup works even if the sendMessage delivery fails.
+try {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes.extensionEnabled) {
+      extensionEnabled = changes.extensionEnabled.newValue !== false;
+    }
+  });
+} catch (e) {
+  // Not in an extension context
+}
+
 // Hover-Hotkey variables
 let hoveredElement = null;
 let mouseX = 0;
@@ -112,10 +127,17 @@ const injectStyles = () => {
 
     body.aegis-hide-ai-active .aegis-highlight-ai,
     body.aegis-hide-ai-active .aegis-highlight-suspected,
-    body.aegis-hide-ai-active .aegis-image-highlight-ai,
-    body.aegis-hide-ai-active .aegis-image-highlight-suspected,
     body.aegis-hide-ai-active .aegis-badge,
     body.aegis-hide-ai-active .aegis-image-overlay-text {
+      display: none !important;
+    }
+
+    body.aegis-hide-ai-active .aegis-image-highlight-ai,
+    body.aegis-hide-ai-active .aegis-image-highlight-suspected {
+      display: none !important;
+    }
+
+    body.aegis-hide-ai-active .aegis-media-overlay-badge {
       display: none !important;
     }
 
@@ -708,6 +730,118 @@ const analyzeTextHeuristics = (text) => {
     }
   }
 
+  // 11. General AI Narrative / Personal Essay Patterns
+  // Catches AI-generated personal narratives, application essays, and reflective
+  // prose that lack the typical LinkedIn/corporate markers but still exhibit
+  // mechanical smoothness characteristic of LLM output.
+
+  // A. AI Transition Phrase Overuse — LLMs favor structured connectors to bridge
+  //    ideas. Humans use them occasionally; AI over-uses them.
+  const aiTransitions = [
+    { pattern: /\bThis led me to\b/gi, label: "'This led me to' (formulaic causal bridge)" },
+    { pattern: /\bBecause of this\b/gi, label: "'Because of this' (formulaic causal bridge)" },
+    { pattern: /\bThat whole experience taught me\b/gi, label: "'That whole experience taught me' (template reflection)" },
+    { pattern: /\btaught me a big lesson\b/gi, label: "'taught me a big lesson' (template reflection)" },
+    { pattern: /\bcompletely changed my\b/gi, label: "'completely changed my' (formulaic transformation)" },
+    { pattern: /\bI do not want\b/gi, label: "'I do not want' (formal contraction in personal register)" },
+    { pattern: /\bmy passion was always there\b/gi, label: "'my passion was always there' (AI resolution cliché)" },
+    { pattern: /\bwalked away from\b/gi, label: "'walked away from' (formulaic distancing)" },
+    { pattern: /\btruly matter\b/gi, label: "'truly matter' (AI intensifier phrase)" },
+    { pattern: /\bBack in \d{4}\b/gi, label: "'Back in [year]' (formulaic temporal opener)" },
+    { pattern: /\btricked me\b/gi, label: "'tricked me' (overly dramatic causal attribution)" },
+    { pattern: /\bthe thing I loved doing most\b/gi, label: "'the thing I loved doing most' (template phrasing)" },
+    { pattern: /\bjust could not stay away\b/gi, label: "'just could not stay away' (formulaic turning point)" },
+    { pattern: /\bI want to make.*stronger.*easier\b/gi, label: "'I want to make...stronger...easier' (template mission statement)" },
+    { pattern: /\bno one else gets tricked\b/gi, label: "'no one else gets tricked' (template mission closure)" },
+    { pattern: /\bthe way I did\b/gi, label: "'the way I did' (template reflective closure)" },
+  ];
+  let transitionHits = 0;
+  aiTransitions.forEach(item => {
+    const matches = cleanText.match(item.pattern);
+    if (matches) {
+      transitionHits += matches.length;
+      reasons.push(`AI Narrative Transition: ${item.label} (x${matches.length})`);
+    }
+  });
+  if (transitionHits >= 3) {
+    score += 10 * Math.min(transitionHits, 6);
+    reasons.push(`AI Narrative Transitions: ${transitionHits} formulaic connector phrases detected — LLMs over-use structured causal bridges to link ideas`);
+  }
+
+  // B. Causal Connector Density — AI text chains cause-effect statements with
+  //    high frequency ('because', 'led to', 'so', 'taught me', 'resulted in').
+  const causalWords = cleanText.toLowerCase().match(/\b(because|therefore|thus|hence|consequently|led to|resulted in|taught me|made me|caused me|this led|so I|so it)\b/g) || [];
+  const textSentences = cleanText.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 0);
+  const causalDensity = causalWords.length / Math.max(1, textSentences.length);
+  if (causalDensity > 0.25 && textSentences.length >= 3) {
+    score += 20;
+    reasons.push(`AI Narrative Structure: High causal connector density (${causalWords.length} connectors across ${textSentences.length} sentences) — AI chains cause-effect at an unnatural rate`);
+  } else if (causalDensity > 0.15 && textSentences.length >= 5) {
+    score += 10;
+    reasons.push(`AI Narrative Structure: Elevated causal connector density (${causalWords.length} connectors)`);
+  }
+
+  // C. Uniform Sentence Length (Burstiness) — Human writing alternates short
+  //    punchy sentences with longer complex ones. AI tends toward uniform length.
+  if (textSentences.length >= 4) {
+    const wc = textSentences.map(s => s.split(/\s+/).length);
+    const wordAvg = wc.reduce((a, b) => a + b, 0) / wc.length;
+    const maxDev = Math.max(...wc.map(w => Math.abs(w - wordAvg)));
+    const uniformity = maxDev / Math.max(1, wordAvg);
+    if (uniformity < 0.25) {
+      score += 20;
+      reasons.push(`AI Narrative Cadence: Highly uniform sentence length (max deviation ${Math.round(uniformity * 100)}% from mean) — human writing varies sentence length dramatically`);
+    } else if (uniformity < 0.35) {
+      score += 10;
+      reasons.push(`AI Narrative Cadence: Moderately uniform sentence length (max deviation ${Math.round(uniformity * 100)}% from mean)`);
+    }
+  }
+
+  // D. Template-like Emotional Progression — AI narratives follow a predictable
+  //    emotional arc: setup(fear/doubt) → struggle → return → resolution → mission.
+  const arcPhases = [
+    { pattern: /\b(scared|afraid|worried|doubt|fear|anxious|nervous)\b/gi, phase: "fear" },
+    { pattern: /\b(walked away|moved on|gave up|left|turned away|stepped away)\b/gi, phase: "departure" },
+    { pattern: /\b(could not stay|came back|returned|started again|couldn't stay away|drew me back)\b/gi, phase: "return" },
+    { pattern: /\b(passion was always|always there|never left|always loved|deep down)\b/gi, phase: "rediscovery" },
+    { pattern: /\b(changed my|transformed|lesson|taught me|big lesson)\b/gi, phase: "lesson" },
+    { pattern: /\b(no one else|don't want anyone|prevent|stop|make sure)\b/gi, phase: "mission" },
+  ];
+  const phasesFound = arcPhases.filter(p => { p.pattern.lastIndex = 0; return p.pattern.test(cleanText); }).map(p => p.phase);
+  if (phasesFound.length >= 4) {
+    score += 25;
+    reasons.push(`AI Narrative Arc: ${phasesFound.length}-phase template emotional arc detected (${phasesFound.join(' → ')}) — AI generates textbook problem→struggle→return→mission arcs`);
+  } else if (phasesFound.length >= 3) {
+    score += 12;
+    reasons.push(`AI Narrative Arc: ${phasesFound.length}-phase emotional arc detected (${phasesFound.join(' → ')}) — common in AI-generated personal narratives`);
+  }
+
+  // E. Overly Smooth Sentence Openers — Humans vary sentence beginnings; AI
+  //    often uses pronoun-heavy, subject-first openings (I, My, This, That).
+  if (textSentences.length >= 5) {
+    const openers = textSentences.map(s => {
+      const w = s.split(/\s+/)[0]?.toLowerCase().replace(/[^a-z]/g, '');
+      return w || '';
+    }).filter(w => w.length > 0);
+    const pronounOpeners = openers.filter(w => ['i', 'my', 'this', 'that', 'still', 'however', 'because'].includes(w));
+    const pronounRatio = pronounOpeners.length / openers.length;
+    if (pronounRatio > 0.6) {
+      score += 15;
+      reasons.push(`AI Narrative Voice: ${Math.round(pronounRatio * 100)}% of sentences open with pronouns or formulaic starters (I/My/This/That/Still/However) — humans vary openings more`);
+    }
+  }
+
+  // F. Perfect Grammar with Formal Register in Personal Text — AI-generated
+  //    personal narratives often use full contractions ('do not' vs 'don't')
+  //    and avoid contractions entirely in informal contexts.
+  const fullFormNegations = cleanText.match(/\b(do not|does not|did not|cannot|could not|would not|should not|will not|have not|has not|had not|was not|were not|is not|are not)\b/gi) || [];
+  const contractionMatches = cleanText.match(/\b(don't|doesn't|didn't|can't|couldn't|wouldn't|shouldn't|won't|haven't|hasn't|hadn't|wasn't|weren't|isn't|aren't|I'm|I've|I'd|I'll)\b/gi) || [];
+  const isPersonalNarrative = /\bI (was|am|have|had|started|began|felt|wanted|loved|decided|learned|built|chose)\b/i.test(cleanText);
+  if (isPersonalNarrative && fullFormNegations.length >= 3 && contractionMatches.length <= fullFormNegations.length) {
+    score += 15;
+    reasons.push(`AI Narrative Register: ${fullFormNegations.length} full-form negations ('do not', 'did not', etc.) vs ${contractionMatches.length} contractions — AI over-formalizes personal narrative text`);
+  }
+
   // Capitalization & Grammar Checks (Human Indicators)
   let humanScoreReduction = 0;
   
@@ -1292,6 +1426,7 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
     scanSensitivity = settingsResult.sensitivity;
   }
   const showVibe = (settingsResult && settingsResult.showVibecodedAlert !== undefined) ? settingsResult.showVibecodedAlert : false;
+  const showBadges = (settingsResult && settingsResult.showInlineBadges !== undefined) ? settingsResult.showInlineBadges : true;
 
   const existingVibeBar = document.getElementById("aegis-vibecoded-top-bar");
   if (existingVibeBar && (!isVibecoded || !showVibe)) {
@@ -1372,15 +1507,16 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
 
         node.element.classList.add(result.score >= 60 ? "aegis-highlight-ai" : "aegis-highlight-suspected");
 
-        const badge = document.createElement("span");
-        badge.className = `aegis-badge ${result.score >= 60 ? "aegis-badge-ai" : "aegis-badge-suspected"}`;
-        badge.textContent = `AI ${result.score}%`;
-        badge.addEventListener("click", (e) => {
-          e.stopPropagation();
-          openDiagnosticDrawer(item, "text");
-        });
-
-        node.element.prepend(badge);
+        if (showBadges) {
+          const badge = document.createElement("span");
+          badge.className = `aegis-badge ${result.score >= 60 ? "aegis-badge-ai" : "aegis-badge-suspected"}`;
+          badge.textContent = `AI ${result.score}%`;
+          badge.addEventListener("click", (e) => {
+            e.stopPropagation();
+            openDiagnosticDrawer(item, "text");
+          });
+          node.element.prepend(badge);
+        }
       }
     }
   }
@@ -1420,21 +1556,22 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
 
         img.classList.add(imgResult.score >= 60 ? "aegis-image-highlight-ai" : "aegis-image-highlight-suspected");
 
-        const parent = img.parentElement;
-        if (parent && !parent.classList.contains("aegis-media-container")) {
-          const badge = document.createElement("span");
-          badge.className = `aegis-badge ${imgResult.score >= 60 ? "aegis-badge-ai" : "aegis-badge-suspected"} aegis-media-overlay-badge`;
-          badge.textContent = `AI IMAGE ${imgResult.score}%`;
-          badge.addEventListener("click", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            openDiagnosticDrawer(item, "image");
-          });
+        if (showBadges) {
+          const parent = img.parentElement;
+          if (parent && !parent.classList.contains("aegis-media-container")) {
+            const badge = document.createElement("span");
+            badge.className = `aegis-badge ${imgResult.score >= 60 ? "aegis-badge-ai" : "aegis-badge-suspected"} aegis-media-overlay-badge`;
+            badge.textContent = `AI IMAGE ${imgResult.score}%`;
+            badge.addEventListener("click", (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              openDiagnosticDrawer(item, "image");
+            });
 
-          if (getComputedStyle(parent).position === "static") {
-            parent.style.position = "relative";
-          }
-          parent.appendChild(badge);
+            if (getComputedStyle(parent).position === "static") {
+              parent.style.position = "relative";
+            }
+            parent.appendChild(badge);
 
           const overlayText = document.createElement("div");
           overlayText.className = "aegis-image-overlay-text";
@@ -1460,6 +1597,7 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
           `;
           overlayText.innerText = imgResult.score >= 60 ? "AI Generated Image" : "Suspected AI Image";
           parent.appendChild(overlayText);
+          }
         }
       }
     }
@@ -1808,7 +1946,11 @@ document.addEventListener("keydown", (e) => {
   // Trigger on Alt (Option on Mac), Control, or Alt+A / Ctrl+A combos
   const isTriggerKey = e.key === "Alt" || e.key === "Control" || (e.altKey && e.key.toLowerCase() === "a") || (e.ctrlKey && e.key.toLowerCase() === "a");
   if (isTriggerKey && hoveredElement) {
-    triggerLocalScan(hoveredElement);
+    // Always check storage directly — the in-memory flag can be stale
+    chrome.storage.local.get(["extensionEnabled"], (result) => {
+      if (result.extensionEnabled === false) return;
+      triggerLocalScan(hoveredElement);
+    });
   }
 });
 
@@ -1840,15 +1982,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "getPageStatus") {
     if (scanResults.scannedAt) {
       sendResponse({ status: "success", data: scanResults });
-    } else {
+    } else if (extensionEnabled) {
       performPageScan().then(results => {
         sendResponse({ status: "success", data: results });
       });
+    } else {
+      sendResponse({ status: "success", data: { text: [], images: [], videos: [], score: 100, scannedAt: null } });
     }
     return true;
   }
 
   else if (request.action === "runScan") {
+    if (!extensionEnabled) {
+      sendResponse({ status: "disabled" });
+      return true;
+    }
     performPageScan(request.options).then(results => {
       sendResponse({ status: "success", data: results });
     });
@@ -1856,6 +2004,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   else if (request.action === "runDeepScan") {
+    if (!extensionEnabled) {
+      sendResponse({ status: "disabled" });
+      return true;
+    }
     triggerDeepScanAnimation((results) => {
       sendResponse({ status: "success", data: results });
     });
@@ -1863,6 +2015,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   else if (request.action === "scanSelectedText") {
+    if (!extensionEnabled) {
+      sendResponse({ status: "disabled" });
+      return true;
+    }
     // Context Menu Trigger: analyze selected text segment
     const textSegment = request.text || "";
     if (textSegment.trim().length > 0) {
@@ -1879,6 +2035,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   else if (request.action === "scanSelectedImage") {
+    if (!extensionEnabled) {
+      sendResponse({ status: "disabled" });
+      return true;
+    }
     // Context Menu Trigger: analyze image source url
     const imageUrl = request.url || "";
     if (imageUrl) {
@@ -1905,9 +2065,36 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ status: "success", isHidden: hide });
   }
 
+  else if (request.action === "applyHideAI") {
+    // Called from background.js context menu: apply or remove the hide state
+    const hide = request.hide;
+    if (hide) {
+      document.body.classList.add("aegis-hide-ai-active");
+    } else {
+      document.body.classList.remove("aegis-hide-ai-active");
+    }
+    sendResponse({ status: "success", isHidden: hide });
+  }
+
   else if (request.action === "getHideAIStatus") {
     const isHidden = document.body.classList.contains("aegis-hide-ai-active");
     sendResponse({ status: "success", isHidden: isHidden });
+  }
+
+  else if (request.action === "enableExtension") {
+    extensionEnabled = true;
+    sendResponse({ status: "success", enabled: true });
+  }
+
+  else if (request.action === "disableExtension") {
+    extensionEnabled = false;
+    // Remove all badges and highlights when disabling
+    document.querySelectorAll(".aegis-badge, .aegis-image-overlay-text").forEach(e => e.remove());
+    document.querySelectorAll(".aegis-highlight-ai, .aegis-highlight-suspected, .aegis-image-highlight-ai, .aegis-image-highlight-suspected").forEach(e => {
+      e.classList.remove("aegis-highlight-ai", "aegis-highlight-suspected", "aegis-image-highlight-ai", "aegis-image-highlight-suspected");
+    });
+    document.body.classList.remove("aegis-hide-ai-active");
+    sendResponse({ status: "success", enabled: false });
   }
 
   else if (request.action === "updateSettings") {
@@ -1948,7 +2135,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 // Initialize on page load
 try {
-  chrome.storage.local.get(["settings"], (result) => {
+  chrome.storage.local.get(["settings", "extensionEnabled"], (result) => {
     const settings = result.settings;
     const enableText = settings ? settings.enableTextScan : true;
     const enableImg = settings ? settings.enableImageScan : true;
@@ -1958,18 +2145,26 @@ try {
       scanSensitivity = settings.sensitivity;
     }
 
+    // Restore the enabled/disabled state from storage
+    if (result.extensionEnabled === false) {
+      extensionEnabled = false;
+    }
+
     injectStyles();
     if (!autoOverlays) {
       document.body.classList.add("aegis-hide-image-overlays");
     }
 
-    setTimeout(() => {
-      performPageScan({
-        text: enableText,
-        images: enableImg,
-        videos: enableVid
-      });
-    }, 1500);
+    // Only run the initial scan if the extension is enabled
+    if (extensionEnabled) {
+      setTimeout(() => {
+        performPageScan({
+          text: enableText,
+          images: enableImg,
+          videos: enableVid
+        });
+      }, 1500);
+    }
   });
 } catch (e) {
   // Silent fail if outside active extension runtime boundaries

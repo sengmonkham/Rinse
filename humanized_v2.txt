@@ -1,0 +1,5 @@
+Back in 2023, I was ready to choose Computer Science as my major because I really loved coding and building apps. Then AI started blowing up, and everyone kept saying it was going to replace programmers. I got spooked and decided programming was a dead end. So I bailed on the thing I loved most.
+
+But here's the thing. I couldn't stay away. I started messing around with web dev tutorials, contributed to some open source projects on GitHub, and somehow landed an internship at a startup in Singapore. The passion was always there, just buried under all that fear.
+
+That whole mess flipped my entire career trajectory. I don't want anyone else going through that same spiral, getting fooled by synthetic content until we can't tell what's real anymore. So I'm building RINSE (Remove Inauthentic Noise), a web extension that flags AI-generated text, images, and video. This fellowship means a lot because I've been grinding alone for too long. I want mentors, I want to do actual research, and I want to ship something that actually works. RINSE needs to be sharper, more reliable, and dead simple to use.

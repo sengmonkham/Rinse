@@ -537,8 +537,11 @@ def predict_video_deep():
         s3 = analyze_frequency_domain(mid_frame)
         s4 = analyze_neural_and_heatmap("", mid_frame)
 
-        # Layer 5: Temporal Coherence
+        # Layer 5: Temporal Coherence. Only meaningful with a real frame
+        # sequence - a lone frame would inject a meaningless neutral 50 into
+        # the fusion vote, so mark the layer inactive instead.
         s5 = analyze_video_temporal_coherence(loaded_frames)
+        temporal_score = s5["score"] if len(loaded_frames) >= 3 else None
 
         verdict = fuse_ensemble_verdict(
             layers={
@@ -546,7 +549,7 @@ def predict_video_deep():
                 "c2pa": s2["score"],
                 "frequency": s3["score"],
                 "neural": s4["score"],
-                "temporal": s5["score"]
+                "temporal": temporal_score
             },
             layer_reasons={
                 "synthid": [s1["reason"]] if s1.get("reason") else [],
@@ -671,7 +674,7 @@ def predict_storyscope():
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 5001))
     print(f"Starting RINSE Cloud Detector server on port {port}...")
     if API_KEY:
         print("Bearer-token authentication is enabled (API_KEY is set).")

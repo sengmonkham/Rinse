@@ -10,6 +10,7 @@ interface ChromeRuntime {
   readonly id: string | undefined;
   readonly lastError: ChromeLastError | undefined;
   sendMessage(message: unknown, callback?: (response: MessageResponse) => void): void;
+  getURL(path: string): string;
 }
 
 interface ChromeTabInfo {
@@ -51,6 +52,7 @@ interface MessageResponse {
 interface ChromeTabs {
   query(queryInfo: ChromeQueryInfo, callback: (tabs: ChromeTabInfo[]) => void): void;
   sendMessage(tabId: number, message: unknown, callback?: (response: MessageResponse) => void): void;
+  create(options: { url: string }, callback?: (tab: ChromeTabInfo) => void): void;
 }
 
 interface ChromeStorageLocal {

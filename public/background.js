@@ -58,6 +58,12 @@ chrome.runtime.onInstalled.addListener(() => {
     title: "Scan image for AI markers",
     contexts: ["image"]
   });
+
+  chrome.contextMenus.create({
+    id: "rinseToggleHideAI",
+    title: "Hide AI Generated Content",
+    contexts: ["page"]
+  });
 });
 
 // Periodic alarm listener
@@ -70,6 +76,17 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // Extension startup listener
 chrome.runtime.onStartup.addListener(() => {
   checkSubscriptionStatus();
+});
+
+// Update context menu title to reflect current tab's hide state when the user switches tabs
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  const storageKey = `hideAI_${activeInfo.tabId}`;
+  chrome.storage.local.get([storageKey], (result) => {
+    const isHidden = Boolean(result[storageKey]);
+    chrome.contextMenus.update("rinseToggleHideAI", {
+      title: isHidden ? "Show AI Generated Content" : "Hide AI Generated Content"
+    });
+  });
 });
 
 // Query /api/v1/me on the web app to verify subscription status
@@ -133,6 +150,22 @@ function checkSubscriptionStatus(sendResponse) {
   });
 }
 
+// Broadcast extensionEnabled state to all tabs when storage changes
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.extensionEnabled) {
+    const enabled = changes.extensionEnabled.newValue !== false;
+    chrome.tabs.query({}, (tabs) => {
+      for (const tab of tabs) {
+        if (tab.id) {
+          chrome.tabs.sendMessage(tab.id, {
+            action: enabled ? "enableExtension" : "disableExtension",
+          }).catch(() => {}); // Ignore tabs without content script
+        }
+      }
+    });
+  }
+});
+
 // Handle context menu clicks
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab || !tab.id) return;
@@ -146,6 +179,22 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     chrome.tabs.sendMessage(tab.id, {
       action: "scanSelectedImage",
       url: info.srcUrl
+    });
+  } else if (info.menuItemId === "rinseToggleHideAI") {
+    const tabId = tab.id;
+    // Read current per-tab hide state, toggle it, and notify the content script
+    const storageKey = `hideAI_${tabId}`;
+    chrome.storage.local.get([storageKey], (result) => {
+      const currentlyHidden = Boolean(result[storageKey]);
+      const nextHidden = !currentlyHidden;
+      chrome.storage.local.set({ [storageKey]: nextHidden });
+      chrome.tabs.sendMessage(tabId, {
+        action: "applyHideAI",
+        hide: nextHidden
+      });
+      chrome.contextMenus.update("rinseToggleHideAI", {
+        title: nextHidden ? "Show AI Generated Content" : "Hide AI Generated Content"
+      });
     });
   }
 });
