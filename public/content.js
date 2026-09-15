@@ -452,6 +452,172 @@ const injectStyles = () => {
   document.head.appendChild(style);
 };
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Video URL Detection (mirrors the backend/canvas-demo detectAIVideo logic)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/** Parse video URL and extract platform/source info */
+const parseVideoUrl = (url) => {
+  if (!url) return { source: "unknown", id: null, url };
+
+  // YouTube patterns
+  const ytMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/)([a-zA-Z0-9_-]{11})/);
+  if (ytMatch) return { source: "youtube", id: ytMatch[1], url };
+
+  // Bare YouTube ID
+  const bareId = url.match(/^([a-zA-Z0-9_-]{11})$/);
+  if (bareId) return { source: "youtube", id: bareId[1], url };
+
+  // Instagram patterns
+  const igMatch = url.match(/instagram\.com\/reel\/([a-zA-Z0-9_-]+)/);
+  if (igMatch) return { source: "instagram", id: igMatch[1], url };
+
+  const igPostMatch = url.match(/instagram\.com\/p\/([a-zA-Z0-9_-]+)/);
+  if (igPostMatch) return { source: "instagram", id: igPostMatch[1], url };
+
+  const igTvMatch = url.match(/instagram\.com\/tv\/([a-zA-Z0-9_-]+)/);
+  if (igTvMatch) return { source: "instagram", id: igTvMatch[1], url };
+
+  // TikTok patterns
+  const tikMatch = url.match(/tiktok\.com\/.*\/video\/(\d+)/);
+  if (tikMatch) return { source: "tiktok", id: tikMatch[1], url };
+
+  const tikShortMatch = url.match(/tiktok\.com\/@[^\/]+\/video\/(\d+)/);
+  if (tikShortMatch) return { source: "tiktok", id: tikShortMatch[1], url };
+
+  // Vimeo
+  const vmMatch = url.match(/vimeo\.com\/(\d+)/);
+  if (vmMatch) return { source: "vimeo", id: vmMatch[1], url };
+
+  return { source: "unknown", id: null, url };
+};
+
+/** Check if video URL contains AI video platform indicators */
+const checkAiVideoHosts = (url) => {
+  const flags = [];
+  let score = 0;
+  const lower = url.toLowerCase();
+
+  const aiVideoHosts = [
+    { host: "sora", label: "OpenAI Sora" },
+    { host: "runwayml", label: "Runway ML" },
+    { host: "runway", label: "Runway" },
+    { host: "pika-ai", label: "Pika Labs" },
+    { host: "pika", label: "Pika" },
+    { host: "lumaai", label: "Luma Dream Machine" },
+    { host: "lumalabs", label: "Luma Labs" },
+    { host: "kaiber", label: "Kaiber" },
+    { host: "deforum", label: "Deforum (Stable Diffusion)" },
+    { host: "stable-video-diffusion", label: "Stable Video Diffusion" },
+    { host: "zeroscope", label: "ZeroScope" },
+    { host: "moondream", label: "MoonDream" },
+    { host: " KlingAI", label: "Kling AI" },
+    { host: "hailuo", label: "Hailuo AI" },
+    { host: "minimax", label: "MiniMax" },
+  ];
+
+  for (const { host, label } of aiVideoHosts) {
+    if (lower.includes(host)) {
+      score = Math.max(score, 85);
+      flags.push(`AI video platform: ${label}`);
+    }
+  }
+
+  // Known AI video generation terms in URL
+  const aiVideoTerms = [
+    { pattern: /gen(-|_)?video/i, label: "generative video" },
+    { pattern: /ai(-|_)?generated/i, label: "AI-generated marker" },
+    { pattern: /synthetic(-|_)?media/i, label: "synthetic media" },
+    { pattern: /deep(-|_)?fake/i, label: "deepfake indicator" },
+    { pattern: /stable(-|_)?diff/i, label: "Stable Diffusion" },
+    { pattern: /midjourney/i, label: "Midjourney" },
+    { pattern: /dall(-|_)?e/i, label: "DALL-E" },
+    { pattern: /\bgenAIC|\bai-video|\bcontent-ai/i, label: "domain suggests AI content" },
+  ];
+
+  for (const { pattern, label } of aiVideoTerms) {
+    if (pattern.test(lower)) {
+      score = Math.max(score, 70);
+      flags.push(`URL contains: ${label}`);
+    }
+  }
+
+  return { score, flags };
+};
+
+/** Get YouTube thumbnail URL from video ID */
+const getYouTubeThumbnail = (videoId, quality = "default") => {
+  const qualityMap = { default: "default.jpg", medium: "mqdefault.jpg", high: "hqdefault.jpg" };
+  return `https://img.youtube.com/vi/${videoId}/${qualityMap[quality]}`;
+};
+
+/** Detect AI-generated videos by URL analysis */
+const detectAIVideo = (url) => {
+  const flags = [];
+  let score = 0;
+
+  const parsed = parseVideoUrl(url);
+  const urlLower = url.toLowerCase();
+
+  // 1. Check AI video hosts/terms
+  const aiHostCheck = checkAiVideoHosts(url);
+  score += aiHostCheck.score;
+  flags.push(...aiHostCheck.flags);
+
+  // 2. Platform-specific analysis
+  if (parsed.source === "youtube" && parsed.id) {
+    flags.push("YouTube video detected");
+    flags.push(`Video ID: ${parsed.id}`);
+    flags.push(`Thumbnail: ${getYouTubeThumbnail(parsed.id)}`);
+    score = Math.max(score, 10); // YouTube is neutral
+  } else if (parsed.source === "instagram" && parsed.id) {
+    flags.push("Instagram video/reel detected");
+    flags.push(`Media ID: ${parsed.id}`);
+    score = Math.max(score, 15); // Instagram is slightly suspicious (lots of AI content)
+  } else if (parsed.source === "vimeo" && parsed.id) {
+    flags.push("Vimeo video detected");
+    score = Math.max(score, 10);
+  } else if (parsed.source === "unknown") {
+    flags.push("Unrecognized video URL format");
+    score = Math.max(score, 25); // Unknown sources are suspicious
+
+    // Check if it might be a direct video file
+    if (/\\\.(mp4|webm|ogg|mov|avi|mkv)/i.test(url)) {
+      flags.push("Direct video file URL");
+      flags.push("Cannot verify source authenticity");
+      score = Math.max(score, 30);
+    }
+  }
+
+  // 3. Check for short URL services that hide the real source
+  const shorteners = ["bit.ly", "tinyurl", "t.co", "buff.ly", "ow.ly", "qr.io", "rb.gy", "shorturl.at"];
+  if (shorteners.some((s) => urlLower.includes(s))) {
+    flags.push("URL uses shortener service — actual source hidden");
+    score += 20;
+  }
+
+  // 4. TikTok detection (often has AI-generated content)
+  if (parsed.source === "tiktok" || /tiktok\.com/i.test(url)) {
+    flags.push("TikTok video detected");
+    flags.push("TikTok has high volume of AI-generated content");
+    score = Math.max(score, 25);
+    if (parsed.id) {
+      flags.push(`Video ID: ${parsed.id}`);
+    }
+  }
+
+  const tier =
+    score >= 80 ? "AI_DEFINITE" :
+    score >= 55 ? "AI_LIKELY" :
+    score >= 30 ? "SUSPICIOUS" : "AUTHENTIC";
+
+  return {
+    score: Math.min(99, score),
+    tier,
+    flags: flags.length > 0 ? flags : ["No AI indicators found in video URL"]
+  };
+};
+
 // Check if a URL points to an AI generative domain/tool
 const isAIGenerativeUrl = (urlStr) => {
   if (!urlStr) return false;
@@ -490,10 +656,92 @@ const isAIGenerativeUrl = (urlStr) => {
 // Check if a string contains typical AI buzzwords, emojis, lists, or hyphen compounds
 const analyzeTextHeuristics = (text) => {
   const cleanText = text.trim();
-  if (cleanText.length < 50) return null; // Parse slightly shorter segments for hover interactions
+  if (cleanText.length < 15) return null; // Very short text — need at least a sentence
 
   let score = 0;
   const reasons = [];
+
+  // ── SHORT-TEXT AI DETECTION ──────────────────────────────────────────
+  // Patterns that identify AI-generated text even in very short snippets
+  // (15-200 chars) where narrative classifiers can't operate.
+  if (cleanText.length < 200) {
+    // A1. Overly polished greeting + formal structure in short text
+    //     Real short messages are casual; AI short messages are formal.
+    const shortFormalGreeting = /^(Dear|Hello|Hi there|Greetings|Good (morning|afternoon|evening)),?\s/i.test(cleanText);
+    const shortFormalClosing = /(Best regards|Sincerely|Kind regards|Thank you|Cheers),?\s*$/i.test(cleanText);
+    if (shortFormalGreeting && shortFormalClosing && cleanText.length < 300) {
+      score += 30;
+      reasons.push("Short-Text AI: Formal greeting + formal closing in short text — AI mimics email structure even in brief messages");
+    }
+
+    // A2. Perfect grammar + no contractions in casual context
+    const hasNoContractions = !/\b(can't|won't|don't|isn't|aren't|wasn't|weren't|hasn't|haven't|hadn't|couldn't|wouldn't|shouldn't|I'm|I've|I'd|I'll|we're|we've|we'd|we'll|they're|they've|they'd|they'll|that's|there's|here's|let's|what's|who's|how's)\b/i.test(cleanText);
+    const hasFullFormNegations = /\b(do not|does not|did not|cannot|could not|would not|should not|will not|have not|has not|had not|is not|are not|was not|were not)\b/i.test(cleanText);
+    const wordCount = cleanText.split(/\s+/).length;
+    if (hasNoContractions && hasFullFormNegations && wordCount >= 5 && wordCount <= 50) {
+      score += 25;
+      reasons.push("Short-Text AI: Full-form negations without contractions in short text — AI over-formalizes brief messages");
+    }
+
+    // A3. Buzzword density in short text
+    const shortBuzzwords = /\b(leverage|synerg(y|ize)|streamline|optimize|enhance|revolutionize|transform|innovate|empower|unleash|unlock|elevate|accelerate|holistic|paradigm|ecosystem|seamless|cutting.edge|game.changing|best.in.class|world.class|industry.leading)\b/gi;
+    const buzzMatches = cleanText.match(shortBuzzwords) || [];
+    if (buzzMatches.length >= 2 && wordCount <= 50) {
+      score += 25;
+      reasons.push(`Short-Text AI: ${buzzMatches.length} corporate buzzwords in ${wordCount} words — AI loads short text with marketing jargon`);
+    }
+
+    // A4. Sentence-level uniformity in short text
+    const shortSentences = cleanText.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 0);
+    if (shortSentences.length >= 2 && shortSentences.length <= 6) {
+      const sLens = shortSentences.map(s => s.split(/\s+/).length);
+      const avg = sLens.reduce((a, b) => a + b, 0) / sLens.length;
+      const maxDev = Math.max(...sLens.map(l => Math.abs(l - avg)));
+      if (maxDev < avg * 0.2 && avg >= 5) {
+        score += 20;
+        reasons.push("Short-Text AI: Uniform sentence lengths in short text — humans vary more even in brief messages");
+      }
+    }
+
+    // A5. No typos, no informal markers
+    const hasInformalMarkers = /\b(lol|omg|btw|tbh|imo|imo|ngl|smh|fwiw|fyi|idk|brb|ttyl|gotta|wanna|gonna|kinda|sorta|dunno|y'all|ain't)\b/i.test(cleanText);
+    const hasTypo = /\b(teh|hte|adn|nad|fo|ot|taht|thn|bcuase|beacuse|alot|definately|occured|recieve|seperate|accomodate)\b/i.test(cleanText);
+    if (!hasInformalMarkers && !hasTypo && wordCount >= 8 && wordCount <= 40 && !cleanText.includes('\n')) {
+      score += 15;
+      reasons.push("Short-Text AI: Perfect grammar with no informal markers in short text — suspiciously polished");
+    }
+
+    // A6. Formulaic short AI patterns
+    const formulaicShort = [
+      { pattern: /\bI'd be happy to\b/i, label: "Formulaic AI offer: 'I'd be happy to'" },
+      { pattern: /\bHere'?s? (a |an |the )?(summary|overview|breakdown|list)\b/i, label: "Formulaic AI structure: 'Here's a [noun]'" },
+      { pattern: /\bLet me (help|assist|explain|clarify|show)\b/i, label: "Formulaic AI offer: 'Let me [verb]'" },
+      { pattern: /\bCertainly[!]?\s/i, label: "AI affirmative: 'Certainly!'" },
+      { pattern: /\bGreat question[!]?\s/i, label: "AI deflection: 'Great question!'" },
+      { pattern: /\bHere (are|is) (the |some |a )?\d+\b/i, label: "AI list format: 'Here are [N]...'" },
+      { pattern: /\bIn (summary|conclusion|essence),?\b/i, label: "AI conclusion marker" },
+      { pattern: /\bWould you like me to\b/i, label: "AI offer: 'Would you like me to'" },
+    ];
+    let formulaicHits = 0;
+    formulaicShort.forEach(item => {
+      if (item.pattern.test(cleanText)) {
+        formulaicHits++;
+        reasons.push(`Short-Text AI: ${item.label}`);
+      }
+    });
+    if (formulaicHits >= 1) {
+      score += 20 * formulaicHits;
+    }
+
+    // A7. Emoji-only or emoji-heavy short text
+    const emojiRegex = /[\u{1F300}-\u{1F9FF}\u{2700}-\u{27BF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{2600}-\u{26FF}]/gu;
+    const emojis = cleanText.match(emojiRegex) || [];
+    const nonEmojiWords = cleanText.replace(emojiRegex, '').trim().split(/\s+/).filter(w => w.length > 0).length;
+    if (emojis.length >= 3 && nonEmojiWords <= 10) {
+      score += 20;
+      reasons.push(`Short-Text AI: ${emojis.length} emojis with only ${nonEmojiWords} words — AI-generated reaction content`);
+    }
+  }
 
   // 1. Emoji density and AI/corporate patterns
   // Emojis: Spaceship (🚀), Sparkles (✨), Brain (🧠), Lightbulb (💡), Target (🎯), Briefcase (💼), Handshake (🤝), fire (🔥), chart (📈)
@@ -842,6 +1090,265 @@ const analyzeTextHeuristics = (text) => {
     reasons.push(`AI Narrative Register: ${fullFormNegations.length} full-form negations ('do not', 'did not', etc.) vs ${contractionMatches.length} contractions — AI over-formalizes personal narrative text`);
   }
 
+  // G. AI Phishing / Scam Email Patterns — AI-generated phishing emails and
+  //    scam messages use specific urgency/fear tactics and formulaic praise that
+  //    differ from human-written spam (which is often poorly written).
+  const phishingPatterns = [
+    { pattern: /\bspecial reward\b/gi, points: 15, label: "Scam lure: 'special reward'" },
+    { pattern: /\bcash prize\b/gi, points: 15, label: "Scam lure: 'cash prize'" },
+    { pattern: /\bselected (you|from)\b/gi, points: 12, label: "Scam lure: 'selected you/from'" },
+    { pattern: /\bhard work and contributions\b/gi, points: 12, label: "Scam lure: generic praise template" },
+    { pattern: /\bnot a joke and it is not a trick\b/gi, points: 18, label: "Scam tell: redundant legitimacy assertion" },
+    { pattern: /\bnot a trick\b/gi, points: 12, label: "Scam tell: 'not a trick' defensiveness" },
+    { pattern: /\bact fast\b/gi, points: 15, label: "Scam urgency: 'act fast'" },
+    { pattern: /\bonly (open|available) for a short time\b/gi, points: 15, label: "Scam urgency: artificial time pressure" },
+    { pattern: /\bjust need to confirm\b/gi, points: 10, label: "Scam call-to-action: minimizes effort" },
+    { pattern: /\bonly take(s)? (two|2|a couple) minutes?\b/gi, points: 10, label: "Scam call-to-action: trivializes effort" },
+    { pattern: /\bclick the link below\b/gi, points: 15, label: "Scam call-to-action: link click pressure" },
+    { pattern: /\bfill out the form\b/gi, points: 10, label: "Scam call-to-action: form filling" },
+    { pattern: /\byour name came up\b/gi, points: 12, label: "Scam lure: impersonal selection claim" },
+    { pattern: /\bchosen from a small group\b/gi, points: 12, label: "Scam lure: exclusivity appeal" },
+    { pattern: /\bwe want to give this to you\b/gi, points: 12, label: "Scam lure: unsolicited gift framing" },
+    { pattern: /\bconfirm your details\b/gi, points: 12, label: "Scam call-to-action: personal data request" },
+    { pattern: /\bsend you the full details\b/gi, points: 10, label: "Scam lure: deferred information" },
+    { pattern: /\bwe are excited to\b/gi, points: 8, label: "Scam tone: forced enthusiasm" },
+    { pattern: /\blook(s)? forward to\b/gi, points: 8, label: "Scam tone: formulaic closing" },
+    { pattern: /\bwell known company\b/gi, points: 12, label: "Scam lure: vague authority appeal" },
+    { pattern: /\bindustry leaders\b/gi, points: 10, label: "Scam lure: prestige appeal" },
+    { pattern: /\byour potential\b/gi, points: 10, label: "Scam lure: flattery appeal" },
+    { pattern: /\bprivate event\b/gi, points: 10, label: "Scam lure: exclusivity appeal" },
+    { pattern: /\breward includes\b/gi, points: 10, label: "Scam lure: benefit enumeration" },
+    { pattern: /\breply to this email\b/gi, points: 10, label: "Scam call-to-action: email reply pressure" },
+    { pattern: /\bthe selection team\b/gi, points: 12, label: "Scam tell: anonymous authority signature" },
+  ];
+
+  let phishingScore = 0;
+  let phishingHits = 0;
+  phishingPatterns.forEach(item => {
+    const matches = cleanText.match(item.pattern);
+    if (matches) {
+      phishingScore += item.points * matches.length;
+      phishingHits += matches.length;
+      reasons.push(`AI Phishing Pattern: ${item.label} (x${matches.length})`);
+    }
+  });
+  // Phishing patterns are highly specific — multiple hits strongly indicate AI-generated scam content
+  if (phishingHits >= 3) {
+    score += phishingScore;
+  } else if (phishingHits === 2) {
+    score += Math.min(phishingScore, 25);
+  } else if (phishingHits === 1) {
+    score += Math.min(phishingScore, 15);
+  }
+
+  // H. Conversational AI Text Patterns — Catches AI-generated text that avoids
+  //    typical LLM buzzwords but still exhibits mechanical smoothness.
+  //    This catches phishing emails, scam letters, and plain AI prose.
+
+  // Overly formal register in short personal/business text
+  const formalPatterns = [
+    { pattern: /\bI am writing to (tell|inform|let you know)\b/gi, points: 12, label: "Overly formal opener: 'I am writing to...'" },
+    { pattern: /\bPlease reply to this\b/gi, points: 8, label: "Formulaic closing: 'Please reply to this'" },
+    { pattern: /\bWe think you deserve\b/gi, points: 10, label: "Formulaic praise: 'We think you deserve'" },
+    { pattern: /\bWe see your potential\b/gi, points: 10, label: "Formulaic flattery: 'We see your potential'" },
+    { pattern: /\bThis is not a\b/gi, points: 5, label: "Defensive framing: 'This is not a...'" },
+    { pattern: /\bBest regards,?\b/gi, points: 5, label: "Formulaic email closing: 'Best regards'" },
+    { pattern: /\bPlease (reply|respond|confirm|click|fill|provide)\b/gi, points: 5, label: "Formulaic request: 'Please [action]'" },
+    { pattern: /\bif you have any questions\b/gi, points: 8, label: "Formulaic offer: 'if you have any questions'" },
+    { pattern: /\bwe (are|will|have)\b/gi, points: 3, label: "Corporate 'we' voice (institutional impersonal)" },
+  ];
+
+  let formalScore = 0;
+  let formalHits = 0;
+  formalPatterns.forEach(item => {
+    const matches = cleanText.match(item.pattern);
+    if (matches) {
+      formalScore += item.points * matches.length;
+      formalHits += matches.length;
+      reasons.push(`AI Conversational Pattern: ${item.label} (x${matches.length})`);
+    }
+  });
+  // High formal pattern density in short text indicates AI generation
+  const wordCount = cleanText.split(/\s+/).length;
+  if (formalHits >= 3) {
+    score += formalScore;
+  } else if (formalHits === 2 && wordCount < 500) {
+    score += Math.min(formalScore, 20);
+  }
+
+  // I. Plain-text AI Cadence — Even without buzzwords, AI text exhibits
+  //    predictable sentence structure. Check for repetitive sentence starters
+  //    and uniform paragraph length in non-corporate text.
+  if (textSentences.length >= 4 && wordCount >= 100) {
+    const starters = textSentences.map(s => {
+      const words = s.split(/\s+/).slice(0, 3).join(' ').toLowerCase();
+      return words;
+    });
+    const starterFreq = {};
+    starters.forEach(s => { starterFreq[s] = (starterFreq[s] || 0) + 1; });
+    let maxStarterRepeat = 0;
+    for (const k in starterFreq) {
+      if (starterFreq[k] > maxStarterRepeat) maxStarterRepeat = starterFreq[k];
+    }
+    if (maxStarterRepeat >= 3) {
+      score += 15;
+      reasons.push(`AI Text Pattern: Repetitive sentence opening structure (${maxStarterRepeat}x same 3-word start)`);
+    }
+  }
+
+  // Track whether social-engineering patterns fired — if so, we suppress the
+  //  humanScoreReduction because those 'human indicators' (lowercase sentences,
+  //  lowercase 'i', casual tone) are exactly what humanized phishing deliberately
+  //  uses to appear authentic.
+  let socialEngineeringDetected = false;
+
+  // N. Humanized Phishing Detection — Catches phishing/scam emails that have
+  //    been rewritten to bypass naive AI detectors. Even when humanized with
+  //    personality, specific details, and varied sentence structure, these emails
+  //    retain core social-engineering patterns that differ from legitimate
+  //    business communication.
+
+  // N1. Urgency + Benefit Combo — The core social engineering tactic: promise
+  //     something valuable with artificial time pressure. Legitimate event
+  //     invitations rarely combine "money" with "deadline" in the same email.
+  const hasBenefit = /\b(stipend|money|cash|prize|reward|payment|honorarium|compensation)\b/i.test(cleanText);
+  const hasUrgency = /\b(act fast|deadline|only (open|available)|spots? left|time is running|limited (time|spots?|space)|closing soon|final (day|call)|last chance|by friday|end of (the week|this week)|48 hours|before it.?s? (too late|gone))\b/i.test(cleanText);
+  if (hasBenefit && hasUrgency) {
+    score += 20;
+    socialEngineeringDetected = true;
+    reasons.push("Humanized Phishing: Combines benefit promise (money/reward) with artificial urgency — classic social engineering combo rarely seen in legitimate emails");
+  }
+
+  // N2. Unrequested Opportunity with CTA — A stranger emails you offering
+  //     something valuable and asks you to fill out a form or click a link.
+  //     Legitimate business emails from known contacts don't need to justify
+  //     their own existence ("this is not a joke").
+  const hasCTA = /\b(fill out|click the|follow the link|sign up|register|submit|apply|confirm your|verify your|provide your|link below|form (linked|at the|below)|takes (a |about a )?minute)\b/i.test(cleanText);
+  const hasUnsolicited = /\b(your name came up|stopped on your name|you (were|have been) (selected|chosen|picked|nominated|shortlisted)|we (found|noticed|discovered) you|your (profile|work|profile came|name came|name (was|is))|pulled up.*your name|reached? out to you)\b/i.test(cleanText);
+  if (hasCTA && hasUnsolicited) {
+    score += 18;
+    socialEngineeringDetected = true;
+    reasons.push("Humanized Phishing: Unsolicited opportunity combined with a call-to-action (form/link) — hallmark of social engineering emails");
+  }
+
+  // N3. Pre-emptive Trust Building — Legitimate emails don't need to insist
+  //     they're real. Phishing emails often include trust-defusing phrases.
+  const trustBuilding = [
+    { pattern: /\b(nothing creepy\b|not (a )?(joke|trick|scam|spam))/gi, label: "Pre-emptive trust assertion" },
+    { pattern: /\b(i (actually|genuinely|really) (read|check|respond))/gi, label: "Over-proactive responsiveness claim" },
+    { pattern: /\b(this is (my )?(personal|real|actual))/gi, label: "Identity authenticity claim" },
+    { pattern: /\b(don'?t (ask|worry|fret)|nothing (weird|creepy|strange))\b/gi, label: "Suspicion deflection" },
+  ];
+  let trustHits = 0;
+  trustBuilding.forEach(item => {
+    if (item.pattern.test(cleanText)) {
+      trustHits++;
+      reasons.push(`Humanized Phishing: ${item.label} — legitimate senders don't preemptively defend against suspicion`);
+    }
+  });
+  if (trustHits >= 2) {
+    score += 15;
+  }
+
+  // N4. Vague Authority + Deferred Details — The sender references an
+  //     authority figure (boss, colleague) but can't provide specifics about
+  //     the opportunity, budget, or logistics. "I don't know" repeated about
+  //     key details is a phishing hallmark (prevents fact-checking).
+  const vagueAuthority = /\b(my (boss|manager|director|colleague|coworker|team lead)|she'?s? (handling|managing|in charge of|controlling))\b/i.test(cleanText);
+  const deferredDetails = [
+    /\b(i (don'?t know|have no idea|can'?t (remember|recall|confirm|say)))/gi,
+    /\b(don'?t (ask|quote) me)/gi,
+    /\b(i (would|'?ll?) have to (check|verify|look|ask))/gi,
+    /\b(she'?s? (said|mentioned) (that )?(it (might|could|would) be|around))/gi,
+  ];
+  let deferredHits = 0;
+  deferredDetails.forEach(p => { deferredHits += (cleanText.match(p) || []).length; });
+  if (vagueAuthority && deferredHits >= 2) {
+    score += 15;
+    reasons.push(`Humanized Phishing: Defers to unnamed authority and can't confirm key details (${deferredHits} uncertainty statements) — prevents recipient from fact-checking`);
+  }
+
+  // N5. Excessive Self-Deprecation as Social Lubricant — Humanized phishing
+  //     emails overuse self-deprecation to build false rapport and disarm
+  //     suspicion. Real business emails are brief and don't apologize for
+  //     their own length.
+  const selfDeprecation = [
+    /\b(i'?m (terrible|bad|awful|the worst) at (writing|emails?|being concise|communicating))/gi,
+    /\b(sorry (this is|if (this is|it'?s) )?(so |really )?(long|verbose|a lot))/gi,
+    /\b(my (girlfriend|boyfriend|partner|wife|husband|friend) (says|told|tells) (me|i))/gi,
+    /\b(i (keep )?(meaning to|meant to|was (going to|supposed to)))/gi,
+  ];
+  let selfDepHits = 0;
+  selfDeprecation.forEach(p => { selfDepHits += (cleanText.match(p) || []).length; });
+  if (selfDepHits >= 2) {
+    score += 12;
+    reasons.push(`Humanized Phishing: ${selfDepHits} self-deprecating / rapport-building phrases — overuse of social lubricant to disarm suspicion`);
+  }
+
+  // N6. Perfect Narrative Embedded in Email Format — The email tells a
+  //     complete story with named characters, specific locations, and a
+  //     chronological arc. Real business emails are transactional, not
+  //     narrative. This catches "humanized" phishing that wraps the scam
+  //     in a story to bypass pattern detectors.
+  const namedCharacters = cleanText.match(/\b[A-Z][a-z]+ (said|told|asked|showed|handed|pulled|reminded|mentioned|wanted|organized|booked|finalized)/g) || [];
+  const specificLocations = cleanText.match(/\b(street|avenue|road|boulevard|plaza|drive|lane|floor|building|room|venue|coworking|office)\b/gi) || [];
+  const dialogueQuotes = cleanText.match(/"[^"]{10,}"/g) || [];
+  if (namedCharacters.length >= 2 && dialogueQuotes.length >= 2) {
+    score += 18;
+    reasons.push(`Humanized Phishing: Email contains a narrative with ${namedCharacters.length} named characters and ${dialogueQuotes.length} dialogue quotes — legitimate business emails are transactional, not story-driven`);
+  }
+
+  // N7. Form/Link + Scarcity Combo — Asking someone to fill out a form while
+  //     simultaneously claiming limited availability is the signature of
+  //     social engineering. The form is the payload delivery mechanism.
+  const hasForm = /\b(google form|form|link below|link at the|click the link|sign-up|registration form|form linked|form is linked)\b/i.test(cleanText);
+  const hasScarcity = /\b(\d+ (of|out of|spots?|seats?|places?|slots?) left|room for|only (a few|\d+)|filling (fast|up)|limited (availability|spots?|space)|\d+ (already )?(confirmed|filled|taken)|headcount|finalize.*(headcount|catering|number)|by (friday|monday|end of))\b/i.test(cleanText);
+  if (hasForm && hasScarcity) {
+    score += 15;
+    socialEngineeringDetected = true;
+    reasons.push("Humanized Phishing: Combines form/link request with scarcity claim — social engineering payload delivery with artificial pressure");
+  }
+
+  // N8. Reluctant Sender Frame — "I was asked to send this" / "here I am"
+  //     creates false authenticity. Real reluctant senders just don't send.
+  const reluctantFrame = /\b(here I am|she (said|told) me to|i (was (told|asked|instructed) to|had to|needed to)|someone (told|asked|made) me|making me do this|she (made|forced|asked|told) me)/i.test(cleanText);
+  if (reluctantFrame) {
+    score += 10;
+    socialEngineeringDetected = true;
+    reasons.push("Humanized Phishing: 'Reluctant sender' frame — the sender claims they were told/forced to send this, creating false authenticity");
+  }
+
+  // N9. Email That Tells Its Own Origin Story — Legitimate business emails
+  //     are transactional: state purpose, ask for action. They don't narrate
+  //     how they came to be written. When an email explains its own genesis
+  //     (who found the name, how the list was made, what happened at the
+  //     meetup), it's a humanization tactic wrapping social engineering.
+  const originStory = [
+    /\b(it (started|began|came about) (when|because|at|from|with))/gi,
+    /\b(she (said|told|showed|handed|pulled|pointed))/gi,
+    /\b(he (said|told|showed|handed|pulled|pointed))/gi,
+    /\b(afterward|meanwhile|after that|before that|then she|then he)/gi,
+    /\b(subscriber list|mailing list|email list|csv file|spreadsheet)/gi,
+  ];
+  let originHits = 0;
+  originStory.forEach(p => { originHits += (cleanText.match(p) || []).length; });
+  if (originHits >= 3) {
+    score += 20;
+    socialEngineeringDetected = true;
+    reasons.push(`Humanized Phishing: Email narrates its own origin story (${originHits} origin phrases) — legitimate emails are transactional, not self-referential`);
+  }
+
+  // N10. Multi-Character Coordination Narrative — Multiple named people
+  //      coordinating to reach the recipient constructs a false provenance
+  //      chain. Real invitations don't explain their selection process.
+  const coordinationVerbs = cleanText.match(/\b[A-Z][a-z]+ (said|told|asked|showed|handed|pulled|reminded|mentioned|wanted|organized|booked|finalized|pushed|reorganized|moved|confirmed)\b/g) || [];
+  const uniqueNames = [...new Set(coordinationVerbs.map(m => m.split(/\s+/)[0]))];
+  if (uniqueNames.length >= 3 && originHits >= 2) {
+    score += 15;
+    socialEngineeringDetected = true;
+    reasons.push(`Humanized Phishing: ${uniqueNames.length}-person coordination narrative (${uniqueNames.join(', ')}) — false provenance chain`);
+  }
+
   // Capitalization & Grammar Checks (Human Indicators)
   let humanScoreReduction = 0;
   
@@ -878,7 +1385,15 @@ const analyzeTextHeuristics = (text) => {
   }
 
   if (humanScoreReduction > 0) {
-    score = Math.max(1, score - humanScoreReduction);
+    // When social engineering patterns are detected, the 'human indicators'
+    //  (lowercase sentences, casual 'i', missing punctuation) are likely
+    //  deliberate humanization tactics — reduce their penalty significantly.
+    if (socialEngineeringDetected) {
+      score = Math.max(1, score - Math.floor(humanScoreReduction * 0.15));
+      reasons.push("Note: 'Human indicators' (casual tone, lowercase) suppressed — likely deliberate humanization to bypass detection");
+    } else {
+      score = Math.max(1, score - humanScoreReduction);
+    }
   }
 
   // Cap score at 99
@@ -903,9 +1418,20 @@ const inspectImageMetadata = async (imgUrl) => {
     return null;
   }
 
+  // Resolve relative URLs to absolute. The backend only accepts http(s) URLs;
+  // relative paths like '/images/photo.jpg' cause a 400 rejection.
+  let absoluteUrl = imgUrl;
+  if (!imgUrl.startsWith("http://") && !imgUrl.startsWith("https://")) {
+    try {
+      absoluteUrl = new URL(imgUrl, window.location.href).href;
+    } catch (e) {
+      return null;
+    }
+  }
+
   return new Promise((resolve) => {
     try {
-      chrome.runtime.sendMessage({ action: "fetchImageMetadata", url: imgUrl }, (response) => {
+      chrome.runtime.sendMessage({ action: "fetchImageMetadata", url: absoluteUrl }, (response) => {
         if (response && response.status === "success" && response.found) {
           resolve({
             score: response.score,
@@ -1395,6 +1921,123 @@ const showVibecodedNotification = () => {
 };
 
 // Scan the whole DOM
+// Capture a CONTIGUOUS run of frames from a <video> element for cloud video
+// analysis. The backend's temporal forensics (PwTF-DVD, temporal coherence)
+// require frames spaced at the video's native frame rate: uniformly-spaced
+// seeks across a clip alias real motion into high temporal frequencies and
+// span scene cuts, which fabricates exactly the artifacts the detector looks
+// for. So we play the video (muted) and grab every presented frame via
+// requestVideoFrameCallback, recording the real per-frame intervals.
+//
+// Returns { frames: [...dataURLs], meanIntervalSeconds, droppedIntervals } or
+// null on CORS-taint (cross-origin media without CORS headers), decode errors,
+// or when the video has too little playable content. Pauses/resumes playback
+// and restores the original position/time so the scan doesn't disrupt the page.
+async function extractVideoElementFrames(videoEl, maxFrames = 32) {
+  if (!videoEl || videoEl.tagName !== "VIDEO" || !videoEl.currentSrc) return null;
+  if (videoEl.readyState < 2 || videoEl.error) return null;
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+
+  const duration = isFinite(videoEl.duration) && videoEl.duration > 0 ? videoEl.duration : 0;
+  if (duration && duration < 2.0) return null; // too short for a meaningful window
+
+  const wasPlaying = !videoEl.paused && !videoEl.ended;
+  const originalTime = videoEl.currentTime;
+  const originalVolume = videoEl.volume;
+  const originalMuted = videoEl.muted;
+  const frames = [];
+  const intervals = [];
+  let lastCaptureTime = null;
+
+  const supportsRVFC = typeof videoEl.requestVideoFrameCallback === "function";
+
+  try {
+    if (!duration) return null; // live/stream sources have no seekable window
+    videoEl.muted = true;
+    const scale = Math.min(1, 320 / Math.max(videoEl.videoWidth || 320, videoEl.videoHeight || 320));
+    canvas.width = Math.max(2, Math.round((videoEl.videoWidth || 320) * scale));
+    canvas.height = Math.max(2, Math.round((videoEl.videoHeight || 320) * scale));
+
+    // Start inside the clip (skip common intros/fades), leave headroom at the end.
+    const startTime = Math.min(duration * 0.2, Math.max(0, duration - (maxFrames / 24 + 0.5)));
+    await new Promise((resolve) => {
+      const done = () => {
+        videoEl.removeEventListener("seeked", done);
+        resolve();
+      };
+      videoEl.addEventListener("seeked", done);
+      videoEl.currentTime = startTime;
+      setTimeout(done, 2500); // seek timeout guard
+    });
+
+    const capture = () => {
+      try {
+        ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+        // Throws on a CORS-tainted canvas - caught below, returns null.
+        frames.push(canvas.toDataURL("image/jpeg", 0.8));
+        const now = videoEl.currentTime;
+        if (lastCaptureTime !== null) intervals.push(now - lastCaptureTime);
+        lastCaptureTime = now;
+      } catch (e) {
+        throw e;
+      }
+    };
+
+    if (supportsRVFC) {
+      // Native-rate capture: one frame per presented video frame.
+      await new Promise((resolve) => {
+        let done = false;
+        const finish = () => {
+          if (!done) { done = true; resolve(); }
+        };
+        const step = () => {
+          if (done || frames.length >= maxFrames) return finish();
+          capture();
+          if (frames.length >= maxFrames) return finish();
+          videoEl.requestVideoFrameCallback(step);
+        };
+        videoEl.requestVideoFrameCallback(step);
+        videoEl.play().catch(finish);
+        // Hard cap ~8s of wall time regardless of capture progress.
+        setTimeout(finish, 8000);
+      });
+    } else {
+      // Legacy fallback: play + timed grabs at ~30fps. Intervals are wall-clock
+      // based and only meaningful when playback runs at 1x; still contiguous.
+      await videoEl.play().catch(() => {});
+      const grabInterval = setInterval(capture, 33);
+      const started = Date.now();
+      while (frames.length < maxFrames && !videoEl.ended && Date.now() - started < 8000) {
+        await new Promise((r) => setTimeout(r, 30));
+      }
+      clearInterval(grabInterval);
+    }
+  } catch (e) {
+    return null;
+  } finally {
+    try { videoEl.pause(); } catch { /* ignore */ }
+    videoEl.muted = originalMuted;
+    videoEl.volume = originalVolume;
+    try { videoEl.currentTime = originalTime; } catch { /* ignore */ }
+    if (wasPlaying) {
+      try { videoEl.play(); } catch { /* ignore */ }
+    }
+  }
+
+  if (frames.length < 12) return null; // too few frames for the temporal FFT
+  const meanInterval = intervals.length
+    ? intervals.reduce((a, b) => a + b, 0) / intervals.length
+    : null;
+  const droppedIntervals = intervals.filter((dt) => dt > (meanInterval || 0.05) * 2.5).length;
+  return {
+    frames,
+    meanIntervalSeconds: meanInterval,
+    droppedIntervals
+  };
+}
+
 const performPageScan = async (options = { text: true, images: true, videos: true }) => {
   injectStyles();
   const purpleGradientResult = detectPurpleGradient();
@@ -1607,20 +2250,37 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
   if (options.videos) {
     const videos = Array.from(document.querySelectorAll("video, iframe"));
 
+    // Cloud mode: the backend runs the full spatio-temporal ensemble on frames
+    // extracted from real <video> elements. Local mode keeps the URL-substring
+    // check below (the only offline signal available without a frame decoder).
+    let cloudMode = false;
+    try {
+      const vSettings = await new Promise((resolve) => {
+        chrome.storage.local.get(["settings"], (res) => resolve(res ? res.settings : null));
+      });
+      cloudMode = Boolean(vSettings && vSettings.apiMode === "cloud");
+    } catch { cloudMode = false; }
+
     for (const vid of videos) {
       const src = vid.src || (vid.querySelector("source") ? vid.querySelector("source").src : "");
       if (!src) continue;
 
       scannedCount++;
-      const isSuspectVideo = src.includes("synthesia") || src.includes("heygen") || src.includes("runway");
+
+      // First check for known AI video platforms (URL-based detection)
+      const urlDetection = detectAIVideo(src);
+      const isSuspectVideo = urlDetection.score >= 55 || src.includes("synthesia") || src.includes("heygen");
 
       if (isSuspectVideo) {
         flaggedCount++;
         const id = "vid-" + Math.random().toString(36).substr(2, 9);
+        const reasons = urlDetection.flags.length > 0
+          ? urlDetection.flags
+          : ["Injected synthesia/heygen frame container structures."];
         const item = {
           id: id,
-          score: 98,
-          reasons: ["Injected synthesia/heygen frame container structures."],
+          score: urlDetection.score,
+          reasons: reasons,
           src: src,
           width: vid.width || 640,
           height: vid.height || 360
@@ -1631,8 +2291,8 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
         const parent = vid.parentElement;
         if (parent) {
           const badge = document.createElement("span");
-          badge.className = `aegis-badge aegis-badge-ai aegis-media-overlay-badge`;
-          badge.textContent = `AI VIDEO 98%`;
+          badge.className = `aegis-badge ${urlDetection.score >= 60 ? "aegis-badge-ai" : "aegis-badge-suspected"} aegis-media-overlay-badge`;
+          badge.textContent = `AI VIDEO ${urlDetection.score}%`;
           badge.addEventListener("click", (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -1644,6 +2304,163 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
           }
           parent.appendChild(badge);
         }
+        continue;
+      }
+
+      // Cloud mode: extract frames from a real <video> element and run the
+      // backend's temporal ensemble. Every video that gets a real verdict is
+      // recorded; flagging/badging only happens at >= 55. Extraction failures
+      // (CORS-tainted cross-origin players, un-decoded videos) are recorded
+      // honestly as skipped with a reason instead of vanishing silently.
+      if (cloudMode && vid.tagName === "VIDEO" && !vid.dataset.rinseVideoChecked) {
+        vid.dataset.rinseVideoChecked = "1";
+        const capture = await extractVideoElementFrames(vid).catch(() => null);
+        const frames = capture ? capture.frames : [];
+        if (frames.length >= 12) {
+          const res = await new Promise((resolve) => {
+            try {
+              chrome.runtime.sendMessage({
+                action: "analyzeVideoFrames",
+                frames,
+                url: src,
+                frameIntervalSeconds: capture.meanIntervalSeconds
+              }, (r) => resolve(r || null));
+            } catch { resolve(null); }
+          });
+          const id = "vid-" + Math.random().toString(36).substr(2, 9);
+          const baseItem = {
+            id: id,
+            score: null,
+            reasons: [],
+            src: src,
+            width: vid.videoWidth || vid.width || 640,
+            height: vid.videoHeight || vid.height || 360
+          };
+          if (res && res.found && typeof res.score === "number") {
+            // Only trust the score if we have valid temporal coherence data
+            // (pwtf_metrics with coherence_p05). Without this, a high score
+            // may be a false positive from compression/motion artifacts.
+            const hasValidTemporalData =
+              res.pwtf_metrics &&
+              res.pwtf_metrics.coherence_p05 !== undefined &&
+              res.pwtf_metrics.coherence_p05 !== null;
+            
+            // If score is in suspicious range (55-65) without valid temporal
+            // data, don't flag it - it's likely a false positive.
+            const trustScore = (
+              res.score < 55 ||
+              res.score > 65 ||
+              hasValidTemporalData
+            );
+            
+            // If score is suspicious but coherence floor didn't collapse
+            // (p05 >= 0.25), don't flag as AI - real footage can trigger this.
+            const coherenceCollapsed =
+              hasValidTemporalData &&
+              res.pwtf_metrics.coherence_p05 < 0.25;
+            
+            // The backend's tier is the source of truth (SYNTHETIC_AI /
+            // SUSPICIOUS / UNCERTAIN / INCONCLUSIVE / AUTHENTIC_HUMAN). It
+            // already enforces the false-positive guards before assigning a
+            // decisive tier (the coherence floor must actually collapse,
+            // corroboration requirements, temporal-evidence requirement for
+            // 'authentic'), so flagging is tier-driven here - no duplicated
+            // client-side gating that can disagree with the server.
+            // The fallback tier computation only serves OLD backends that
+            // don't send a tier yet.
+            const tier = res.tier || (res.score >= 80 ? "SYNTHETIC_AI"
+                          : res.score >= 69 ? "SUSPICIOUS"
+                          : res.score >= 55 ? (coherenceCollapsed ? "SUSPICIOUS" : "UNCERTAIN")
+                          : res.score >= 35 ? "INCONCLUSIVE"
+                          : "AUTHENTIC_HUMAN");
+            const shouldFlag = tier === "SYNTHETIC_AI" || tier === "SUSPICIOUS";
+
+            const item = { ...baseItem, score: res.score, tier, confidence: res.confidence, reasons: res.reasons || [] };
+            scanResults.videos.push(item);
+            
+            if (shouldFlag) {
+              flaggedCount++;
+              const parent = vid.parentElement;
+              if (parent) {
+                const badge = document.createElement("span");
+                badge.className = `aegis-badge ${tier === "SYNTHETIC_AI" || res.score >= 70 ? "aegis-badge-ai" : "aegis-badge-suspected"} aegis-media-overlay-badge`;
+                badge.textContent = `AI VIDEO ${res.score}%`;
+                badge.addEventListener("click", (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openDiagnosticDrawer(item, "video");
+                });
+                if (getComputedStyle(parent).position === "static") {
+                  parent.style.position = "relative";
+                }
+                parent.appendChild(badge);
+              }
+            }
+          } else {
+            // Backend reachable but analysis failed (undecodable stream,
+            // server-side decoder missing, etc.) - show the real error.
+            const errMsg = (res && res.error) || "Video analysis failed on the backend.";
+            scanResults.videos.push({ ...baseItem, score: 0, reasons: [errMsg] });
+            console.warn("RINSE video analysis error:", errMsg);
+          }
+        } else if (src && !src.startsWith("blob:") && !src.startsWith("data:")) {
+          // Browser-side extraction failed (CORS-tainted cross-origin player
+          // or an un-decoded <video>). Do not stay silent: send the direct
+          // source URL to the backend - yt-dlp resolves platform links and
+          // direct file URLs are downloaded and decoded server-side.
+          const res = await new Promise((resolve) => {
+            try {
+              chrome.runtime.sendMessage({ action: "analyzeVideoUrl", url: src }, (r) => resolve(r || null));
+            } catch { resolve(null); }
+          });
+          if (res && res.found && typeof res.score === "number") {
+            const id = "vid-" + Math.random().toString(36).substr(2, 9);
+            const tier = res.tier || (res.score >= 80 ? "SYNTHETIC_AI"
+                          : res.score >= 69 ? "SUSPICIOUS"
+                          : res.score >= 55 ? "UNCERTAIN"
+                          : res.score >= 35 ? "INCONCLUSIVE"
+                          : "AUTHENTIC_HUMAN");
+            const item = {
+              id: id,
+              score: res.score,
+              tier,
+              confidence: res.confidence,
+              reasons: res.reasons || [],
+              src: src,
+              width: vid.videoWidth || vid.width || 640,
+              height: vid.videoHeight || vid.height || 360
+            };
+            scanResults.videos.push(item);
+            if (res.score >= 55 && tier !== "INCONCLUSIVE") {
+              flaggedCount++;
+              const parent = vid.parentElement;
+              if (parent) {
+                const badge = document.createElement("span");
+                badge.className = `aegis-badge ${tier === "SYNTHETIC_AI" || res.score >= 70 ? "aegis-badge-ai" : "aegis-badge-suspected"} aegis-media-overlay-badge`;
+                badge.textContent = `AI VIDEO ${res.score}%`;
+                badge.addEventListener("click", (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openDiagnosticDrawer(item, "video");
+                });
+                if (getComputedStyle(parent).position === "static") {
+                  parent.style.position = "relative";
+                }
+                parent.appendChild(badge);
+              }
+            }
+          } else {
+            const errMsg = (res && res.error) || "Could not decode this video in the browser (cross-origin frame access is blocked), and server-side fetch failed. Download the clip and use the Playground upload instead.";
+            scanResults.videos.push({
+              id: "vid-" + Math.random().toString(36).substr(2, 9),
+              score: 0,
+              reasons: [errMsg],
+              src: src,
+              width: vid.videoWidth || vid.width || 640,
+              height: vid.videoHeight || vid.height || 360
+            });
+          }
+        }
       }
     }
   }
@@ -1652,15 +2469,52 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
   if (isAiWorkbench) {
     scanResults.score = 0;
   } else {
-    let baseScore = 100;
-    if (scannedCount > 0 && flaggedCount > 0) {
-      let penaltySum = 0;
-      const items = [...scanResults.text, ...scanResults.images, ...scanResults.videos];
-      items.forEach(item => {
-        penaltySum += item.score;
-      });
-      const avgPenalty = penaltySum / scannedCount;
-      baseScore = Math.round(100 - (avgPenalty * (flaggedCount / scannedCount) * 1.5));
+    // Calculate score based on the WORST detection, not average
+    // This prevents dilution from non-suspicious items
+    let maxAiScore = 0;
+    let totalScanned = 0;
+    let totalFlagged = 0;
+
+    const allItems = [...scanResults.text, ...scanResults.images, ...scanResults.videos];
+    for (const item of allItems) {
+      totalScanned++;
+      // INCONCLUSIVE verdicts (backend could not complete a full analysis -
+      // e.g. a spatial-only video scan with no temporal evidence) carry a
+      // score but must not push the page score toward either extreme: they
+      // count as scanned-but-unresolved, not as evidence of authenticity.
+      const itemInconclusive = item.tier === "INCONCLUSIVE";
+      if (item.score > 0 && !itemInconclusive) {
+        maxAiScore = Math.max(maxAiScore, item.score);
+        if (item.score >= 55) {
+          totalFlagged++;
+        }
+      }
+    }
+
+    // Score calculation: focus on the most suspicious content
+    let finalScore = 100;
+
+    if (totalScanned > 0) {
+      if (totalFlagged > 0) {
+        // If we found AI content, the score should reflect the highest AI confidence
+        // but weighted by how much of the page is AI content
+        const aiRatio = totalFlagged / totalScanned;
+        finalScore = Math.round(100 - (maxAiScore * aiRatio * 1.2));
+
+        // Ensure we don't go below 1 for highly AI pages
+        if (maxAiScore >= 80 && aiRatio > 0.5) {
+          finalScore = Math.min(finalScore, 30);
+        }
+      } else {
+        // No flagged content - check if we scanned anything
+        // If we scanned and found nothing suspicious, score stays high
+        // But if we couldn't scan (e.g., CORS issues), be conservative
+        const hadScanningFailures = allItems.some(item => item.score === 0 && item.reasons && item.reasons.length > 0);
+        if (hadScanningFailures) {
+          // We couldn't analyze some content - be slightly conservative
+          finalScore = Math.max(70, finalScore - 10);
+        }
+      }
     }
 
     // Apply vibecoded penalties
@@ -1668,7 +2522,7 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
     if (scanResults.vibecoded && scanResults.vibecoded.hasPurpleGradient) vibecodedPenalty += 15;
     if (scanResults.vibecoded && scanResults.vibecoded.hasBubbleHeader) vibecodedPenalty += 15;
 
-    scanResults.score = Math.max(1, baseScore - vibecodedPenalty);
+    scanResults.score = Math.max(1, Math.min(100, finalScore - vibecodedPenalty));
   }
 
   try {

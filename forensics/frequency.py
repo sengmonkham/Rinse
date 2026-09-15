@@ -44,9 +44,19 @@ def _haar_dwt_2d(arr: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, n
     return ll, lh, hl, hh
 
 
-def analyze_frequency_domain(img: Image.Image) -> Dict[str, Any]:
+def analyze_frequency_domain(img: Image.Image, include_grid_peaks: bool = True) -> Dict[str, Any]:
     """
     Perform 2D DFT and DWT frequency-domain forensic evaluation.
+
+    Args:
+        img: PIL image to analyze.
+        include_grid_peaks: Include the GAN-checkerboard grid-peak rule. This
+            rule CANNOT be used on video frames: the 512x512 bilinear upscale
+            of an H.264-encoded frame rings periodically in the DFT, producing
+            grid-peak energies of ~10 on essentially every video (real or AI),
+            which flagged all video as synthetic. Callers analyzing decoded
+            video frames must pass include_grid_peaks=False; still-image
+            analysis keeps the rule (default).
 
     Returns:
         {
@@ -90,11 +100,16 @@ def analyze_frequency_domain(img: Image.Image) -> Dict[str, Any]:
         y, x = np.ogrid[:size, :size]
         dist_from_center = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
         high_pass_mask = (dist_from_center > size * 0.12) & (dist_from_center < size * 0.48)
-        
-        hp_mag = log_mag * high_pass_mask
-        mean_hp = np.mean(hp_mag[high_pass_mask])
-        std_hp = np.std(hp_mag[high_pass_mask]) + eps
-        peaks = (hp_mag - mean_hp) / std_hp
+
+        # Z-scores must be computed over ring pixels ONLY. Multiplying by the
+        # boolean mask first (the old behavior) injected thousands of zeroed
+        # pixels, so the mean/std were pulled toward the mask floor and the
+        # zeroed pixels came back as extreme "peaks" — flagging nearly every
+        # photo (real or AI) with the GAN-grid signature.
+        ring_vals = log_mag[high_pass_mask]
+        mean_hp = np.mean(ring_vals)
+        std_hp = np.std(ring_vals) + eps
+        peaks = (ring_vals - mean_hp) / std_hp
         grid_peak_energy = float(np.mean(peaks[peaks > 3.0] ** 2) if np.any(peaks > 3.0) else 0.0)
 
         # 4. 2D Haar Wavelet Subband Energy Ratios
@@ -110,11 +125,12 @@ def analyze_frequency_domain(img: Image.Image) -> Dict[str, Any]:
         score = 15
         reasons: List[str] = []
 
-        # Check periodic grid spikes (GAN signature)
-        if grid_peak_energy > 4.5:
+        # Check periodic grid spikes (GAN signature) - still images only, see
+        # the include_grid_peaks docstring above.
+        if include_grid_peaks and grid_peak_energy > 4.5:
             score += 45
             reasons.append(f"Periodic spectral grid peaks detected (peak energy {grid_peak_energy:.2f}) — characteristic of deconvolution / GAN upsampling.")
-        elif grid_peak_energy > 2.0:
+        elif include_grid_peaks and grid_peak_energy > 2.0:
             score += 20
             reasons.append(f"Mild frequency-domain harmonic peaks (peak energy {grid_peak_energy:.2f}).")
 

@@ -9,6 +9,7 @@ import {
   ShieldAlert, 
   ShieldCheck, 
   Brain,
+  Dna,
   Video,
   Layers,
   Eye,
@@ -133,6 +134,28 @@ interface ImageAnalysisResults {
   frame_scores?: number[];
   temporal_flicker_energy?: number;
   motion_residual_variance?: number;
+  pwtf_metrics?: {
+    centroid_mean?: number;
+    hf_share_mean?: number;
+    entropy_mean?: number;
+    coherence_mean?: number;
+  };
+  pwtf_spectrum_bins?: number;
+  pwtf_frames_analyzed?: number;
+  d3_metrics?: {
+    volatility?: number;
+    mean_velocity?: number;
+    mean_interframe_motion?: number;
+    region_volatility_mean?: number;
+    region_uniformity?: number;
+  };
+  straighten_metrics?: {
+    step_distance_mean?: number;
+    step_distance_std?: number;
+    curvature_mean_deg?: number;
+    curvature_std_deg?: number;
+    path_efficiency?: number;
+  };
 }
 
 interface StoryScopeDimension {
@@ -184,6 +207,11 @@ export default function Playground({ settings }: PlaygroundProps) {
     results: StoryScopeResults | null;
     error: string | null;
   }>({ loading: false, results: null, error: null });
+  const [dnaDetect, setDnaDetect] = useState<{
+    loading: boolean;
+    results: any | null;
+    error: string | null;
+  }>({ loading: false, results: null, error: null });
   
   // Image analysis states
   const [imgUrl, setImgUrl] = useState('');
@@ -193,7 +221,9 @@ export default function Playground({ settings }: PlaygroundProps) {
   
   // Video analysis states
   const [videoUrl, setVideoUrl] = useState('');
+  const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoResults, setVideoResults] = useState<ImageAnalysisResults | null>(null);
+  const [videoError, setVideoError] = useState<string | null>(null);
 
   const [analyzing, setAnalyzing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -217,14 +247,45 @@ export default function Playground({ settings }: PlaygroundProps) {
       showVibecodedAlert: false, apiMode: "local", apiUrl: "", apiKey: ""
     };
     if (activeForStory.apiMode === 'cloud') {
-      setStoryScope({ loading: true, results: null, error: null });
       const base = (activeForStory.apiUrl || 'http://localhost:5001/predict').replace(/\/predict$/, '');
-      fetch(`${base}/predict/storyscope`, {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(activeForStory.apiKey ? { 'Authorization': `Bearer ${activeForStory.apiKey}` } : {})
+      };
+
+      // StoryScope for longer texts (needs 200+ chars for narrative features)
+      if (textToScan.length >= 200) {
+        setStoryScope({ loading: true, results: null, error: null });
+        fetch(`${base}/predict/storyscope`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ text: textToScan })
+        })
+          .then(async (response) => {
+            if (!response.ok) {
+              const body = await response.json().catch(() => ({}));
+              throw new Error(body.error || `Server returned status ${response.status}`);
+            }
+            return response.json();
+          })
+          .then((data) => {
+            setStoryScope({ loading: false, results: data as StoryScopeResults, error: null });
+          })
+          .catch((err) => {
+            setStoryScope({
+              loading: false,
+              results: null,
+              error: `StoryScope unavailable: ${err.message}`
+            });
+          });
+      }
+
+      // DNA-DetectLLM for ALL text lengths (works from 20 chars)
+      // Complements StoryScope on short texts, supplements on long texts
+      setDnaDetect({ loading: true, results: null, error: null });
+      fetch(`${base}/predict/text/dna`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(activeForStory.apiKey ? { 'Authorization': `Bearer ${activeForStory.apiKey}` } : {})
-        },
+        headers,
         body: JSON.stringify({ text: textToScan })
       })
         .then(async (response) => {
@@ -235,13 +296,13 @@ export default function Playground({ settings }: PlaygroundProps) {
           return response.json();
         })
         .then((data) => {
-          setStoryScope({ loading: false, results: data as StoryScopeResults, error: null });
+          setDnaDetect({ loading: false, results: data, error: null });
         })
         .catch((err) => {
-          setStoryScope({
+          setDnaDetect({
             loading: false,
             results: null,
-            error: `StoryScope unavailable: ${err.message}. Check that server.py is running - the default offline engine needs no API key.`
+            error: `DNA-DetectLLM unavailable: ${err.message}`
           });
         });
     }
@@ -782,6 +843,210 @@ export default function Playground({ settings }: PlaygroundProps) {
         });
       }
 
+      // K. AI Phishing / Scam Email Patterns — AI-generated phishing emails and
+      //    scam messages use specific urgency/fear tactics and formulaic praise.
+      const phishingPatterns = [
+        { pattern: /\bspecial reward\b/gi, points: 15, label: "Scam lure: 'special reward'" },
+        { pattern: /\bcash prize\b/gi, points: 15, label: "Scam lure: 'cash prize'" },
+        { pattern: /\bselected (you|from)\b/gi, points: 12, label: "Scam lure: 'selected you/from'" },
+        { pattern: /\bhard work and contributions\b/gi, points: 12, label: "Scam lure: generic praise template" },
+        { pattern: /\bnot a joke and it is not a trick\b/gi, points: 18, label: "Scam tell: redundant legitimacy assertion" },
+        { pattern: /\bnot a trick\b/gi, points: 12, label: "Scam tell: 'not a trick' defensiveness" },
+        { pattern: /\bact fast\b/gi, points: 15, label: "Scam urgency: 'act fast'" },
+        { pattern: /\bonly (open|available) for a short time\b/gi, points: 15, label: "Scam urgency: artificial time pressure" },
+        { pattern: /\bjust need to confirm\b/gi, points: 10, label: "Scam call-to-action: minimizes effort" },
+        { pattern: /\bonly take(s)? (two|2|a couple) minutes?\b/gi, points: 10, label: "Scam call-to-action: trivializes effort" },
+        { pattern: /\bclick the link below\b/gi, points: 15, label: "Scam call-to-action: link click pressure" },
+        { pattern: /\bfill out the form\b/gi, points: 10, label: "Scam call-to-action: form filling" },
+        { pattern: /\byour name came up\b/gi, points: 12, label: "Scam lure: impersonal selection claim" },
+        { pattern: /\bchosen from a small group\b/gi, points: 12, label: "Scam lure: exclusivity appeal" },
+        { pattern: /\bwe want to give this to you\b/gi, points: 12, label: "Scam lure: unsolicited gift framing" },
+        { pattern: /\bconfirm your details\b/gi, points: 12, label: "Scam call-to-action: personal data request" },
+        { pattern: /\bsend you the full details\b/gi, points: 10, label: "Scam lure: deferred information" },
+        { pattern: /\bwe are excited to\b/gi, points: 8, label: "Scam tone: forced enthusiasm" },
+        { pattern: /\blook(s)? forward to\b/gi, points: 8, label: "Scam tone: formulaic closing" },
+        { pattern: /\bwell known company\b/gi, points: 12, label: "Scam lure: vague authority appeal" },
+        { pattern: /\bindustry leaders\b/gi, points: 10, label: "Scam lure: prestige appeal" },
+        { pattern: /\byour potential\b/gi, points: 10, label: "Scam lure: flattery appeal" },
+        { pattern: /\bprivate event\b/gi, points: 10, label: "Scam lure: exclusivity appeal" },
+        { pattern: /\breward includes\b/gi, points: 10, label: "Scam lure: benefit enumeration" },
+        { pattern: /\breply to this email\b/gi, points: 10, label: "Scam call-to-action: email reply pressure" },
+        { pattern: /\bthe selection team\b/gi, points: 12, label: "Scam tell: anonymous authority signature" },
+      ];
+
+      let phishingScore = 0;
+      let phishingHits = 0;
+      phishingPatterns.forEach(item => {
+        const matches = text.match(item.pattern);
+        if (matches) {
+          phishingScore += item.points * matches.length;
+          phishingHits += matches.length;
+          flags.push(`AI Phishing Pattern: ${item.label} (x${matches.length})`);
+        }
+      });
+      if (phishingHits >= 3) {
+        score += phishingScore;
+      } else if (phishingHits === 2) {
+        score += Math.min(phishingScore, 25);
+      } else if (phishingHits === 1) {
+        score += Math.min(phishingScore, 15);
+      }
+
+      // L. Conversational AI Text Patterns — Catches AI-generated text that
+      //    avoids typical LLM buzzwords but still exhibits mechanical smoothness.
+      const formalPatterns = [
+        { pattern: /\bI am writing to (tell|inform|let you know)\b/gi, points: 12, label: "Overly formal opener: 'I am writing to...'" },
+        { pattern: /\bPlease reply to this\b/gi, points: 8, label: "Formulaic closing: 'Please reply to this'" },
+        { pattern: /\bWe think you deserve\b/gi, points: 10, label: "Formulaic praise: 'We think you deserve'" },
+        { pattern: /\bWe see your potential\b/gi, points: 10, label: "Formulaic flattery: 'We see your potential'" },
+        { pattern: /\bThis is not a\b/gi, points: 5, label: "Defensive framing: 'This is not a...'" },
+        { pattern: /\bBest regards,?\b/gi, points: 5, label: "Formulaic email closing: 'Best regards'" },
+        { pattern: /\bPlease (reply|respond|confirm|click|fill|provide)\b/gi, points: 5, label: "Formulaic request: 'Please [action]'" },
+        { pattern: /\bif you have any questions\b/gi, points: 8, label: "Formulaic offer: 'if you have any questions'" },
+        { pattern: /\bwe (are|will|have)\b/gi, points: 3, label: "Corporate 'we' voice (institutional impersonal)" },
+      ];
+
+      let formalScore = 0;
+      let formalHits = 0;
+      formalPatterns.forEach(item => {
+        const matches = text.match(item.pattern);
+        if (matches) {
+          formalScore += item.points * matches.length;
+          formalHits += matches.length;
+          flags.push(`AI Conversational Pattern: ${item.label} (x${matches.length})`);
+        }
+      });
+      const wordCount = text.split(/\s+/).length;
+      if (formalHits >= 3) {
+        score += formalScore;
+      } else if (formalHits === 2 && wordCount < 500) {
+        score += Math.min(formalScore, 20);
+      }
+
+      // M. Plain-text AI Cadence — Repetitive sentence starters
+      const textSentencesForCadence = text.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 0);
+      if (textSentencesForCadence.length >= 4 && wordCount >= 100) {
+        const starters = textSentencesForCadence.map(s => s.split(/\s+/).slice(0, 3).join(' ').toLowerCase());
+        const starterFreq: Record<string, number> = {};
+        starters.forEach(s => { starterFreq[s] = (starterFreq[s] || 0) + 1; });
+        let maxStarterRepeat = 0;
+        for (const k in starterFreq) {
+          if (starterFreq[k] > maxStarterRepeat) maxStarterRepeat = starterFreq[k];
+        }
+        if (maxStarterRepeat >= 3) {
+          score += 15;
+          flags.push(`AI Text Pattern: Repetitive sentence opening structure (${maxStarterRepeat}x same 3-word start)`);
+        }
+      }
+
+      // N. Humanized Phishing Detection
+      // Track if social engineering patterns fire — if so, suppress humanScoreReduction
+      // because lowercase sentences / casual 'i' are deliberate humanization tactics.
+      let socialEngineeringDetected = false;
+
+      const hasBenefit = /\b(stipend|money|cash|prize|reward|payment|honorarium|compensation)\b/i.test(text);
+      const hasUrgency = /\b(act fast|deadline|only (open|available)|spots? left|time is running|limited (time|spots?|space)|closing soon|final (day|call)|last chance|by friday|end of (the week|this week)|48 hours|before it.?s? (too late|gone))\b/i.test(text);
+      if (hasBenefit && hasUrgency) {
+        score += 20;
+        socialEngineeringDetected = true;
+        flags.push("Humanized Phishing: Combines benefit promise (money/reward) with artificial urgency — classic social engineering combo");
+      }
+
+      const hasCTA = /\b(fill out|click the|follow the link|sign up|register|submit|apply|confirm your|verify your|provide your|link below|form (linked|at the|below)|takes (a |about a )?minute)\b/i.test(text);
+      const hasUnsolicited = /\b(your name came up|stopped on your name|you (were|have been) (selected|chosen|picked|nominated|shortlisted)|we (found|noticed|discovered) you|your (profile|work|profile came|name came|name (was|is))|pulled up.*your name|reached? out to you)\b/i.test(text);
+      if (hasCTA && hasUnsolicited) {
+        score += 18;
+        socialEngineeringDetected = true;
+        flags.push("Humanized Phishing: Unsolicited opportunity combined with a call-to-action — hallmark of social engineering");
+      }
+
+      const trustBuilding = [
+        { pattern: /\b(nothing creepy\b|not (a )?(joke|trick|scam|spam))/gi, label: "Pre-emptive trust assertion" },
+        { pattern: /\b(i (actually|genuinely|really) (read|check|respond))/gi, label: "Over-proactive responsiveness claim" },
+        { pattern: /\b(this is (my )?(personal|real|actual))/gi, label: "Identity authenticity claim" },
+        { pattern: /\b(don'?t (ask|worry|fret)|nothing (weird|creepy|strange))\b/gi, label: "Suspicion deflection" },
+      ];
+      let trustHits = 0;
+      trustBuilding.forEach(item => {
+        if (item.pattern.test(text)) {
+          trustHits++;
+          flags.push(`Humanized Phishing: ${item.label}`);
+        }
+      });
+      if (trustHits >= 2) score += 15;
+
+      const vagueAuthority = /\b(my (boss|manager|director|colleague|coworker|team lead)|she'?s? (handling|managing|in charge of|controlling))\b/i.test(text);
+      const deferredDetails = [
+        /\b(i (don'?t know|have no idea|can'?t (remember|recall|confirm|say)))/gi,
+        /\b(don'?t (ask|quote) me)/gi,
+        /\b(i (would|'?ll?) have to (check|verify|look|ask))/gi,
+      ];
+      let deferredHits = 0;
+      deferredDetails.forEach(p => { deferredHits += (text.match(p) || []).length; });
+      if (vagueAuthority && deferredHits >= 2) {
+        score += 15;
+        flags.push(`Humanized Phishing: Defers to unnamed authority with ${deferredHits} uncertainty statements — prevents fact-checking`);
+      }
+
+      const selfDeprecation = [
+        /\b(i'?m (terrible|bad|awful|the worst) at (writing|emails?|being concise|communicating))/gi,
+        /\b(sorry (this is|if (this is|it'?s) )?(so |really )?(long|verbose|a lot))/gi,
+        /\b(my (girlfriend|boyfriend|partner|wife|husband|friend) (says|told|tells) (me|i))/gi,
+      ];
+      let selfDepHits = 0;
+      selfDeprecation.forEach(p => { selfDepHits += (text.match(p) || []).length; });
+      if (selfDepHits >= 2) {
+        score += 12;
+        flags.push(`Humanized Phishing: ${selfDepHits} self-deprecating rapport-building phrases — disarms suspicion`);
+      }
+
+      const namedCharacters = text.match(/\b[A-Z][a-z]+ (said|told|asked|showed|handed|pulled|reminded|mentioned|wanted|organized|booked|finalized)/g) || [];
+      const dialogueQuotes = text.match(/"[^"]{10,}"/g) || [];
+      if (namedCharacters.length >= 2 && dialogueQuotes.length >= 2) {
+        score += 18;
+        flags.push(`Humanized Phishing: Narrative with ${namedCharacters.length} named characters and ${dialogueQuotes.length} dialogue quotes — legitimate emails are transactional, not story-driven`);
+      }
+
+      const hasForm = /\b(google form|form|link below|link at the|click the link|sign-up|registration form|form linked|form is linked)\b/i.test(text);
+      const hasScarcity = /\b(\d+ (of|out of|spots?|seats?|places?|slots?) left|room for|only (a few|\d+)|filling (fast|up)|limited (availability|spots?|space)|\d+ (already )?(confirmed|filled|taken)|headcount|finalize.*(headcount|catering|number)|by (friday|monday|end of))\b/i.test(text);
+      if (hasForm && hasScarcity) {
+        score += 15;
+        socialEngineeringDetected = true;
+        flags.push("Humanized Phishing: Form/link request with scarcity claim — payload delivery with artificial pressure");
+      }
+
+      const reluctantFrame = /\b(here I am|she (said|told) me to|i (was (told|asked|instructed) to|had to|needed to)|someone (told|asked|made) me)/i.test(text);
+      if (reluctantFrame) {
+        score += 10;
+        socialEngineeringDetected = true;
+        flags.push("Humanized Phishing: 'Reluctant sender' frame — claims they were told to send this");
+      }
+
+      // N9. Email Origin Story
+      const originStory = [
+        /\b(it (started|began|came about) (when|because|at|from|with))/gi,
+        /\b(she (said|told|showed|handed|pulled|pointed))/gi,
+        /\b(he (said|told|showed|handed|pulled|pointed))/gi,
+        /\b(afterward|meanwhile|after that|before that|then she|then he)/gi,
+        /\b(subscriber list|mailing list|email list|csv file|spreadsheet)/gi,
+      ];
+      let originHits = 0;
+      originStory.forEach(p => { originHits += (text.match(p) || []).length; });
+      if (originHits >= 3) {
+        score += 20;
+        socialEngineeringDetected = true;
+        flags.push(`Humanized Phishing: Email narrates its own origin story (${originHits} origin phrases)`);
+      }
+
+      // N10. Multi-Character Coordination
+      const coordinationVerbs = text.match(/\b[A-Z][a-z]+ (said|told|asked|showed|handed|pulled|reminded|mentioned|wanted|organized|booked|finalized|pushed|reorganized|moved|confirmed)\b/g) || [];
+      const uniqueNames = [...new Set(coordinationVerbs.map(m => m.split(/\s+/)[0]))];
+      if (uniqueNames.length >= 3 && originHits >= 2) {
+        score += 15;
+        socialEngineeringDetected = true;
+        flags.push(`Humanized Phishing: ${uniqueNames.length}-person coordination narrative`);
+      }
+
       // Capitalization & Grammar Checks (Human Indicators)
       let humanScoreReduction = 0;
       
@@ -818,7 +1083,12 @@ export default function Playground({ settings }: PlaygroundProps) {
       }
 
       if (humanScoreReduction > 0) {
-        score = Math.max(1, score - humanScoreReduction);
+        if (socialEngineeringDetected) {
+          score = Math.max(1, score - Math.floor(humanScoreReduction * 0.15));
+          flags.push("Note: 'Human indicators' suppressed — casual tone is likely deliberate humanization");
+        } else {
+          score = Math.max(1, score - humanScoreReduction);
+        }
       }
 
       const finalAIScore = Math.min(99, Math.max(1, score));
@@ -900,7 +1170,7 @@ export default function Playground({ settings }: PlaygroundProps) {
         setImgResults({
           score: data.score,
           confidence: data.confidence || "HIGH",
-          tier: data.tier || (data.score >= 75 ? "SYNTHETIC_AI" : data.score >= 50 ? "SUSPICIOUS" : "AUTHENTIC_HUMAN"),
+          tier: data.tier || (data.score >= 80 ? "SYNTHETIC_AI" : data.score >= 69 ? "SUSPICIOUS" : data.score >= 55 ? "UNCERTAIN" : data.score >= 35 ? "INCONCLUSIVE" : "AUTHENTIC_HUMAN"),
           breakdown: data.breakdown || {},
           layers_active: data.layers_active || ["synthid", "c2pa", "frequency", "neural"],
           mode: data.mode || effectiveMode,
@@ -1011,7 +1281,11 @@ export default function Playground({ settings }: PlaygroundProps) {
               satSum += mx > 0 ? (mx - mn) / mx : 0;
             }
             const satMean = satSum / (px.length / 4);
-            if (buckets.size < 700 && satMean > 0.6) {
+            // Saturation gate aligned with server.py / background.js: camera
+            // photos rarely exceed 0.5 mean saturation, while AI toon/3D-render
+            // character art (e.g. Tung Tung Tung Sahur) combines a saturated
+            // limited palette with sparse edges and smooth shaded regions.
+            if (buckets.size < 700 && satMean > 0.5) {
               isAi = true;
               score = Math.max(score, 70);
               breakdown["frequency"] = 72;
@@ -1049,7 +1323,7 @@ export default function Playground({ settings }: PlaygroundProps) {
       setImgResults({
         score: finalScore,
         confidence: isAi ? "HIGH" : "MEDIUM",
-        tier: finalScore >= 75 ? "SYNTHETIC_AI" : finalScore >= 50 ? "SUSPICIOUS" : "AUTHENTIC_HUMAN",
+        tier: finalScore >= 80 ? "SYNTHETIC_AI" : finalScore >= 69 ? "SUSPICIOUS" : finalScore >= 55 ? "UNCERTAIN" : finalScore >= 35 ? "INCONCLUSIVE" : "AUTHENTIC_HUMAN",
         breakdown: breakdown,
         layers_active: Object.keys(breakdown),
         mode: mode,
@@ -1116,11 +1390,27 @@ export default function Playground({ settings }: PlaygroundProps) {
       video.src = url;
     });
 
-  const handleAnalyzeVideo = async (overrideUrl?: string) => {
+  // Read a File into a raw base64 string (no data: prefix) so the server can
+  // decode the video itself with its own frame sampler.
+  const fileToBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || '').split(',')[1] || '');
+      reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
+
+  // The old implementation faked a 68% verdict in local mode and in the cloud
+  // catch block - every video got the same fabricated score. Now the analysis
+  // is honest: cloud mode sends real frames / the raw file to the backend and
+  // surfaces its verdict or error verbatim; local mode runs only what can be
+  // done offline (URL heuristics + a frame palette check) and says so.
+  const handleAnalyzeVideo = async (overrideUrl?: string, file?: File | null) => {
     const targetUrl = overrideUrl || videoUrl || imgUrl;
     if (!targetUrl) return;
     setAnalyzing(true);
     setVideoResults(null);
+    setVideoError(null);
 
     const activeSettings = settings || {
       enableTextScan: true, enableImageScan: true, enableVideoScan: true,
@@ -1128,87 +1418,186 @@ export default function Playground({ settings }: PlaygroundProps) {
       showVibecodedAlert: false, apiMode: "local", apiUrl: "", apiKey: ""
     };
 
+    // ---------- Cloud mode: real spatio-temporal ensemble on the backend ----------
     if (activeSettings.apiMode === 'cloud') {
       const base = (activeSettings.apiUrl || 'http://localhost:5001').replace(/\/predict(\/.*)?$/, '').replace(/\/$/, '');
-      // Sample real frames so the server can run temporal analysis. If the
-      // browser refuses (CORS / unsupported codec), fall back to single-frame
-      // mode and let the server say so instead of silently faking results.
-      const frames = await extractVideoFrames(targetUrl).catch(() => [] as string[]);
-      fetch(`${base}/predict/video/deep`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(activeSettings.apiKey ? { 'Authorization': `Bearer ${activeSettings.apiKey}` } : {})
-        },
-        body: JSON.stringify({
-          frames_base64: frames.length > 0 ? frames : null,
-          image_url: frames.length > 0 || targetUrl.startsWith('data:') ? null : targetUrl,
-          image_base64: frames.length > 0 || !targetUrl.startsWith('data:') ? null : targetUrl
-        })
-      })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((data) => {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(activeSettings.apiKey ? { 'Authorization': `Bearer ${activeSettings.apiKey}` } : {})
+      };
+
+      // Device upload: hand the raw file to the server so IT samples frames
+      // (uniform, up to 24) instead of the browser's 12-frame canvas pass. For
+      // files too large to ship over JSON, fall back to browser extraction.
+      let body: Record<string, unknown> = {};
+      if (file) {
+        if (file.size <= 60 * 1024 * 1024) {
+          const b64 = await fileToBase64(file).catch(() => '');
+          if (b64) {
+            body = { video_base64: b64 };
+          }
+        }
+        if (!body.video_base64) {
+          const frames = await extractVideoFrames(targetUrl).catch(() => [] as string[]);
+          if (frames.length > 0) {
+            body = { frames_base64: frames };
+          } else {
+            setAnalyzing(false);
+            setVideoError('This file is too large to send for analysis and its frames could not be sampled in the browser. Try a shorter clip (under ~60MB).');
+            return;
+          }
+        }
+      } else if (targetUrl.startsWith('http')) {
+        // Link analysis. Try to sample frames client-side first (works for
+        // same-origin / CORS-enabled direct .mp4/.webm URLs). If the browser
+        // cannot decode it - social pages like Instagram Reels, CORS-protected
+        // CDNs - send the URL to the server: it downloads direct file links
+        // itself and resolves social-platform pages via yt-dlp when installed.
+        const frames = await extractVideoFrames(targetUrl).catch(() => [] as string[]);
+        if (frames.length > 0) {
+          body = { frames_base64: frames };
+        } else {
+          body = { video_url: targetUrl };
+        }
+      } else {
+        setAnalyzing(false);
+        setVideoError('Could not load this video to sample frames. Paste a video URL or upload a file.');
+        return;
+      }
+
+      try {
+        const res = await fetch(`${base}/predict/video/deep`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body)
+        });
+        if (!res.ok) {
+          let msg = `Server returned HTTP ${res.status}.`;
+          let isSocialPlatformError = false;
+          try {
+            const j = await res.json();
+            if (j && j.error) {
+              msg = j.error + (j.hint ? ` (${j.hint})` : '');
+              // Detect yt-dlp missing errors for social platforms
+              if (j.error && (
+                j.error.includes('social platform') ||
+                j.error.includes('yt-dlp') ||
+                j.error.includes('Instagram') ||
+                j.error.includes('TikTok')
+              )) {
+                isSocialPlatformError = true;
+              }
+            }
+          } catch { /* non-JSON error body */ }
+          setAnalyzing(false);
+          if (isSocialPlatformError) {
+            setVideoError(
+              msg + ' To analyze this video, install yt-dlp on the server (pip install -U yt-dlp), or download the video file and upload it directly.'
+            );
+          } else {
+            setVideoError(msg);
+          }
+          return;
+        }
+        const data = await res.json();
+        
+        // Sanity check: if the backend returns a score without real temporal
+        // analysis evidence, treat it as an error rather than showing a misleading
+        // number. Specifically: if the score is in the suspicious range (45-65)
+        // but there's no valid PwTF coherence data, this may be a false positive.
+        const hasRealTemporalAnalysis =
+          data.pwtf_metrics &&
+          data.pwtf_metrics.coherence_p05 !== undefined &&
+          data.pwtf_metrics.coherence_p05 !== null;
+        
+        // If score is in the suspicious range and we don't have real temporal
+        // coherence data, it's likely a false positive or unverified result.
+        if (
+          data.score >= 55 &&
+          data.score <= 65 &&
+          !hasRealTemporalAnalysis
+        ) {
+          setAnalyzing(false);
+          setVideoError(
+            'The video analysis returned a suspicious score but could not verify ' +
+            'the temporal coherence data needed to confirm AI generation. ' +
+            'This may be a false positive from video compression or motion. ' +
+            'For accurate results, upload the video file directly.'
+          );
+          return;
+        }
+        
+        // Additional check: if PwTF reports high score but coherence floor
+        // is NOT collapsed (p05 >= 0.25), don't show as AI - it's a false positive.
+        if (
+          data.score >= 55 &&
+          data.score < 70 &&
+          hasRealTemporalAnalysis &&
+          data.pwtf_metrics.coherence_p05 >= 0.25
+        ) {
+          setAnalyzing(false);
+          setVideoResults({
+            score: data.score,
+            confidence: 'LOW',
+            tier: 'INCONCLUSIVE',
+            breakdown: data.breakdown || {},
+            layers_active: data.layers_active || [],
+            frames_analyzed: data.frames_analyzed || 0,
+            frame_scores: data.frame_scores || [],
+            temporal_flicker_energy: data.temporal_flicker_energy,
+            motion_residual_variance: data.motion_residual_variance,
+            pwtf_metrics: data.pwtf_metrics,
+            pwtf_spectrum_bins: data.pwtf_spectrum_bins || 0,
+            pwtf_frames_analyzed: data.pwtf_frames_analyzed || 0,
+            heatmap_overlay_base64: data.heatmap_overlay_base64,
+            reasons: [
+              ...(data.reasons || []),
+              'Note: Temporal frequency analysis detected artifacts, but the coherence floor (p05=' + 
+              data.pwtf_metrics.coherence_p05.toFixed(2) + ') did not collapse. This pattern is consistent with ' +
+              'compression/motion artifacts on real footage, not AI generation. Score marked INCONCLUSIVE.'
+            ],
+            url: targetUrl
+          });
+          return;
+        }
+        
         setAnalyzing(false);
         setVideoResults({
           score: data.score,
           confidence: data.confidence || "HIGH",
-          tier: data.tier || "SUSPICIOUS",
+          tier: data.tier || (data.score >= 80 ? "SYNTHETIC_AI" : data.score >= 69 ? "SUSPICIOUS" : data.score >= 55 ? "UNCERTAIN" : data.score >= 35 ? "INCONCLUSIVE" : "AUTHENTIC_HUMAN"),
           breakdown: data.breakdown || {},
-          layers_active: data.layers_active || ["frequency", "neural", "temporal"],
-          frames_analyzed: data.frames_analyzed || 8,
-          frame_scores: data.frame_scores || [data.score - 2, data.score + 1, data.score, data.score - 1],
-          temporal_flicker_energy: data.temporal_flicker_energy || 0.22,
-          motion_residual_variance: data.motion_residual_variance || 0.16,
+          layers_active: data.layers_active || [],
+          frames_analyzed: data.frames_analyzed || 0,
+          frame_scores: data.frame_scores || [],
+          temporal_flicker_energy: data.temporal_flicker_energy,
+          motion_residual_variance: data.motion_residual_variance,
+          pwtf_metrics: data.pwtf_metrics,
+          pwtf_spectrum_bins: data.pwtf_spectrum_bins || 0,
+          pwtf_frames_analyzed: data.pwtf_frames_analyzed || 0,
+          d3_metrics: data.d3_metrics,
+          straighten_metrics: data.straighten_metrics,
           heatmap_overlay_base64: data.heatmap_overlay_base64,
-          reasons: data.reasons || ["Video stream evaluated across 5 forensic spatio-temporal layers."],
+          reasons: data.reasons || [],
           url: targetUrl
         });
-      })
-      .catch((err) => {
-        console.warn("Video cloud analysis fallback:", err.message);
+      } catch (err) {
         setAnalyzing(false);
-        setVideoResults({
-          score: 68,
-          confidence: "MEDIUM",
-          tier: "SUSPICIOUS",
-          temporal_flicker_energy: 0.26,
-          motion_residual_variance: 0.18,
-          frame_scores: [64, 67, 72, 69, 66, 70, 71, 68],
-          breakdown: { frequency: 62, temporal: 74, neural: 68 },
-          layers_active: ["frequency", "temporal", "neural"],
-          reasons: [
-            "Layer 5 Spatio-Temporal Coherence: High-frequency texture flicker on surface boundaries.",
-            "Optical flow residual variance: Inter-frame non-physical micro-motion detected.",
-            "Layer 3 Frequency: Systematic high-frequency attenuation across frame sequence."
-          ],
-          url: targetUrl
-        });
-      });
+        setVideoError(`Could not reach the RINSE backend at ${base}. Is the server running? (${(err as Error).message})`);
+      }
       return;
     }
 
-    setTimeout(() => {
-      setAnalyzing(false);
-      setVideoResults({
-        score: 68,
-        confidence: "MEDIUM",
-        tier: "SUSPICIOUS",
-        temporal_flicker_energy: 0.24,
-        motion_residual_variance: 0.15,
-        frame_scores: [65, 67, 72, 68, 66, 69, 71, 68],
-        breakdown: { frequency: 62, temporal: 74, neural: 68 },
-        layers_active: ["frequency", "temporal", "neural"],
-        reasons: [
-          "Layer 5 Temporal Coherence: Surface texture micro-flicker detected across frame buffer.",
-          "Optical flow analysis: Subtle landmark drift on subject boundaries.",
-          "Frequency Forensics (Layer 3): High-frequency inter-frame energy residual above natural camera baseline."
-        ],
-        url: targetUrl
-      });
-    }, 1400);
+    // Local/offline mode has been removed from video analysis.
+    // Video analysis now requires Cloud mode with a running backend server.
+    // This ensures all videos are analyzed with the full spatio-temporal ensemble
+    // (PwTF-DVD, temporal coherence, spatial forensics) rather than incomplete
+    // offline heuristics that produce unreliable results.
+    setAnalyzing(false);
+    setVideoError(
+      'Video analysis requires Cloud mode. Please configure your RINSE backend API URL in Settings and ensure the server is running. '
+      + 'For social media links (Instagram, TikTok, YouTube), the server needs yt-dlp installed (pip install -U yt-dlp) to download and analyze the videos.'
+    );
   };
 
   const handleUploadFile = (e: ChangeEvent<HTMLInputElement>) => {
@@ -1228,17 +1617,13 @@ export default function Playground({ settings }: PlaygroundProps) {
 
   const handleUploadVideoFile = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result) {
-          const resultStr = event.target.result as string;
-          setVideoUrl(resultStr);
-          handleAnalyzeVideo(resultStr);
-        }
-      };
-      reader.readAsDataURL(file);
-    }
+    if (!file) return;
+    // Object URLs are same-origin, so <video> can decode local files without
+    // CORS taint and without loading the whole file into a giant base64 string.
+    const url = URL.createObjectURL(file);
+    setVideoFile(file);
+    setVideoUrl(url);
+    handleAnalyzeVideo(url, file);
   };
 
   return (
@@ -1365,6 +1750,38 @@ export default function Playground({ settings }: PlaygroundProps) {
                   <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)', margin: 0 }}>
                     Classified as <strong>{storyScope.results.label}</strong> with {Math.round(storyScope.results.probability * 100)}% confidence across narrative discourse dimensions.
                   </p>
+                </div>
+              )}
+
+              {/* DNA-DetectLLM Results */}
+              {dnaDetect.loading && (
+                <div className="glass" style={{ padding: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div className="pulse-glow" style={{ width: 14, height: 14, borderRadius: '50%', background: 'var(--primary)' }} />
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Running DNA-DetectLLM mutation-repair analysis…</span>
+                </div>
+              )}
+              {dnaDetect.results && !dnaDetect.loading && (
+                <div className="glass" style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px', borderLeft: `4px solid ${dnaDetect.results.score >= 50 ? 'var(--danger)' : 'var(--success)'}` }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Dna size={16} color={dnaDetect.results.score >= 50 ? 'var(--danger)' : 'var(--success)'} />
+                      <h4 style={{ fontSize: '13px', fontWeight: '700', margin: 0 }}>DNA-DetectLLM Mutation-Repair</h4>
+                    </div>
+                    <span style={{ fontSize: '12px', fontWeight: '700', color: dnaDetect.results.score >= 50 ? 'var(--danger)' : 'var(--success)' }}>
+                      {dnaDetect.results.score}% AI
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)', margin: 0 }}>
+                    <strong>{dnaDetect.results.label}</strong> — repair score: {dnaDetect.results.repair_score}, mutation rate: {(dnaDetect.results.mutation_rate * 100).toFixed(0)}%.
+                    {textVal.length < 200 && (
+                      <span style={{ fontStyle: 'italic', opacity: 0.8 }}> (optimized for short text — StoryScope needs 80+ chars)</span>
+                    )}
+                  </p>
+                </div>
+              )}
+              {dnaDetect.error && (
+                <div className="glass" style={{ padding: '10px', fontSize: '11px', color: 'var(--warning)' }}>
+                  {dnaDetect.error}
                 </div>
               )}
 
@@ -1506,8 +1923,8 @@ export default function Playground({ settings }: PlaygroundProps) {
               <div className="glass" style={{ padding: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '15px', fontWeight: '800', color: imgResults.score >= 55 ? 'var(--danger)' : 'var(--success)' }}>
-                      {imgResults.tier || (imgResults.score >= 75 ? "SYNTHETIC AI" : imgResults.score >= 50 ? "SUSPICIOUS" : "AUTHENTIC HUMAN")}
+                    <span style={{ fontSize: '15px', fontWeight: '800', color: imgResults.tier === 'UNCERTAIN' ? 'var(--warning)' : imgResults.score >= 55 ? 'var(--danger)' : 'var(--success)' }}>
+                      {imgResults.tier || (imgResults.score >= 80 ? "SYNTHETIC AI" : imgResults.score >= 69 ? "SUSPICIOUS" : imgResults.score >= 55 ? "UNCERTAIN" : imgResults.score >= 35 ? "INCONCLUSIVE" : "AUTHENTIC HUMAN")}
                     </span>
                     <span 
                       style={{ 
@@ -1645,9 +2062,9 @@ export default function Playground({ settings }: PlaygroundProps) {
             <div style={{ display: 'flex', gap: '6px' }}>
               <input
                 className="input-text"
-                placeholder="Enter video URL or upload clip frame sequence..."
-                value={videoUrl.startsWith("data:") ? "Video Sample Uploaded" : videoUrl}
-                onChange={(e) => setVideoUrl(e.target.value)}
+                placeholder="Video URL (direct file, or Instagram/TikTok/YouTube link) or upload a file"
+                value={videoFile ? `Uploaded: ${videoFile.name}` : videoUrl}
+                onChange={(e) => { setVideoUrl(e.target.value); setVideoFile(null); }}
                 disabled={analyzing}
                 style={{ fontSize: '12px' }}
               />
@@ -1663,16 +2080,28 @@ export default function Playground({ settings }: PlaygroundProps) {
                 type="file" 
                 ref={videoFileInputRef} 
                 onChange={handleUploadVideoFile} 
-                accept="video/*,image/*" 
+                accept="video/*" 
                 style={{ display: 'none' }} 
               />
             </div>
             
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10.5px' }}>
+              <span style={{ color: 'var(--text-muted)' }}>
+                Mode:{' '}
+                <strong style={{ color: 'var(--success)' }}>
+                  CLOUD — full spatio-temporal ensemble (server required)
+                </strong>
+              </span>
+              {!settings?.apiUrl && (
+                <span style={{ color: 'var(--warning)', fontWeight: '700' }}>No backend configured</span>
+              )}
+            </div>
+
             <button 
               onClick={() => handleAnalyzeVideo()}
               className="btn btn-primary"
               style={{ width: '100%', padding: '9px' }}
-              disabled={analyzing || !videoUrl}
+              disabled={analyzing || !videoUrl || !settings?.apiUrl}
             >
               <Activity size={13} />
               <span>{analyzing ? 'Computing Temporal FFT & Optical Flow...' : 'Run Spatio-Temporal Video Analysis'}</span>
@@ -1686,6 +2115,13 @@ export default function Playground({ settings }: PlaygroundProps) {
             </div>
           )}
 
+          {videoError && !analyzing && (
+            <div className="glass" style={{ padding: '12px', border: '1px solid rgba(239,68,68,0.35)', background: 'rgba(239,68,68,0.06)', fontSize: '11.5px', color: 'var(--text-secondary)', lineHeight: '1.5' }}>
+              <div style={{ fontWeight: '700', color: 'var(--danger)', marginBottom: '4px' }}>Video analysis could not run</div>
+              <div>{videoError}</div>
+            </div>
+          )}
+
           {videoResults && !analyzing && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto', flex: '1', paddingRight: '2px' }}>
               
@@ -1693,20 +2129,27 @@ export default function Playground({ settings }: PlaygroundProps) {
               <div className="glass" style={{ padding: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '15px', fontWeight: '800', color: videoResults.score >= 55 ? 'var(--danger)' : 'var(--success)' }}>
+                    <span style={{ fontSize: '15px', fontWeight: '800', color: videoResults.tier === 'UNCERTAIN' ? 'var(--warning)' : videoResults.score >= 55 ? 'var(--danger)' : 'var(--success)' }}>
                       {videoResults.tier || (videoResults.score >= 70 ? "AI GENERATED VIDEO" : "PHYSICALLY COHERENT")}
                     </span>
-                    <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', background: 'rgba(5, 150, 105, 0.12)', color: 'var(--success)', fontWeight: '700' }}>
-                      LAYER 5 ACTIVE
-                    </span>
+                    {videoResults.layers_active?.includes('temporal') && (
+                      <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', background: 'rgba(5, 150, 105, 0.12)', color: 'var(--success)', fontWeight: '700' }}>
+                        LAYER 5 ACTIVE
+                      </span>
+                    )}
+                    {videoResults.breakdown?.pwtf !== undefined && (
+                      <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', background: 'rgba(5, 150, 105, 0.12)', color: 'var(--success)', fontWeight: '700' }}>
+                        LAYER 6 ACTIVE
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '3px' }}>
-                    Temporal texture persistence & optical flow trajectory
+                    Temporal texture persistence, optical flow trajectory & pixel-wise temporal frequency (ICCV 2025)
                   </div>
                 </div>
 
                 <div style={{ textAlign: 'right' }}>
-                  <span style={{ fontSize: '24px', fontWeight: '800', color: videoResults.score >= 55 ? 'var(--danger)' : 'var(--success)' }}>
+                  <span style={{ fontSize: '24px', fontWeight: '800', color: videoResults.tier === 'UNCERTAIN' ? 'var(--warning)' : videoResults.score >= 55 ? 'var(--danger)' : 'var(--success)' }}>
                     {videoResults.score}%
                   </span>
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Video Incoherence</div>
@@ -1718,17 +2161,39 @@ export default function Playground({ settings }: PlaygroundProps) {
                 <div className="glass" style={{ padding: '10px' }}>
                   <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>TEMPORAL FLICKER RATIO</div>
                   <div style={{ fontSize: '16px', fontWeight: '700', color: (videoResults.temporal_flicker_energy || 0) > 0.2 ? 'var(--danger)' : 'var(--success)' }}>
-                    {videoResults.temporal_flicker_energy ?? 0.24}
+                    {videoResults.temporal_flicker_energy ?? '—'}
                   </div>
                   <div style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>Pixel 1D FFT high-freq energy</div>
                 </div>
                 <div className="glass" style={{ padding: '10px' }}>
                   <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>MOTION JITTER VARIANCE</div>
                   <div style={{ fontSize: '16px', fontWeight: '700', color: (videoResults.motion_residual_variance || 0) > 0.15 ? 'var(--danger)' : 'var(--success)' }}>
-                    {videoResults.motion_residual_variance ?? 0.16}
+                    {videoResults.motion_residual_variance ?? '—'}
                   </div>
                   <div style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>Optical flow residual variance</div>
                 </div>
+                {videoResults.pwtf_spectrum_bins !== undefined && videoResults.pwtf_spectrum_bins > 0 && (
+                  <div className="glass" style={{ padding: '10px' }}>
+                    <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>PWTF SPECTRUM (ICCV 2025)</div>
+                    <div style={{ fontSize: '16px', fontWeight: '700', color: (videoResults.breakdown?.pwtf || 0) >= 50 ? 'var(--danger)' : 'var(--success)' }}>
+                      {videoResults.breakdown?.pwtf ?? 0}%
+                    </div>
+                    <div style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>
+                      {videoResults.pwtf_frames_analyzed} frames · {videoResults.pwtf_spectrum_bins} temporal bins · hf share {(videoResults.pwtf_metrics?.hf_share_mean ?? 0).toFixed(2)}
+                    </div>
+                  </div>
+                )}
+                {videoResults.d3_metrics?.volatility !== undefined && (
+                  <div className="glass" style={{ padding: '10px' }}>
+                    <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>D3 SECOND-ORDER DYNAMICS (ICCV 2025)</div>
+                    <div style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-secondary)' }}>
+                      {(videoResults.d3_metrics.volatility ?? 0).toFixed(3)}
+                    </div>
+                    <div style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>
+                      trajectory volatility · region {(videoResults.d3_metrics.region_volatility_mean ?? 0).toFixed(2)} · metrics only
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Frame-by-Frame Progression */}

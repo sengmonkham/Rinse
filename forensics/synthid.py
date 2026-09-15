@@ -74,21 +74,19 @@ def probe_synthid_watermark(img: Image.Image) -> Dict[str, Any]:
         peak_ratio = float(np.max(ring_vals) / (np.mean(ring_vals) + eps))
         carrier_strength = float(np.clip((kurt / 18.0) * (peak_ratio / 2.2), 0.0, 1.0))
 
-        if carrier_strength > 0.88:
-            return {
-                "present": True,
-                "confidence": carrier_strength,
-                "score": 99,
-                "carrier_strength": carrier_strength,
-                "reason": f"SynthID Fourier-domain carrier resonance detected (strength: {carrier_strength:.2f}, kurtosis: {kurt:.1f})."
-            }
-        elif carrier_strength > 0.65:
+        # NOTE: this spectral statistic is NOT a calibrated SynthID decoder (the
+        # real SynthID detector is a trained model). It also excites on benign
+        # periodic content and on lossy re-encode artifacts, so it must never
+        # emit a confident fabricated score: confirmed verdicts come only from
+        # file metadata; the spectral probe is at most one weak, clearly-labeled
+        # soft vote. Everything else stays out of the fusion (score None).
+        if carrier_strength > 0.92:
             return {
                 "present": False,
                 "confidence": carrier_strength,
-                "score": 68,
+                "score": 65,
                 "carrier_strength": carrier_strength,
-                "reason": f"Weak spectral watermark residual detected (carrier resonance: {carrier_strength:.2f}). Inconclusive on Layer 1."
+                "reason": f"Spectral carrier resonance detected (strength: {carrier_strength:.2f}, kurtosis: {kurt:.1f}) — weak, uncalibrated heuristic signal; counted as one soft vote only."
             }
         else:
             return {

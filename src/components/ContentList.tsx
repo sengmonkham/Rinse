@@ -189,9 +189,15 @@ export default function ContentList({ scanResults }: ContentListProps) {
                   <span style={{ fontSize: '11px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '220px' }} title={item.src}>
                     Source: {item.src?.substring(item.src?.lastIndexOf('/') + 1) || 'Embedded Stream'}
                   </span>
-                  <span style={{ fontSize: '12px', fontWeight: '700', color: getScoreColor(item.score) }}>
-                    AI: {item.score}%
-                  </span>
+                  {item.score === 0 ? (
+                    <span style={{ fontSize: '12px', fontWeight: '700', color: 'var(--warning)' }}>
+                      NOT ANALYZED
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: '12px', fontWeight: '700', color: getScoreColor(item.score) }}>
+                      AI: {item.score}%
+                    </span>
+                  )}
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>

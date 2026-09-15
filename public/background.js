@@ -22,7 +22,16 @@ chrome.runtime.onInstalled.addListener(() => {
           webAppUrl: "http://localhost:3000",
           authToken: ""
         },
-        scanHistory: []
+        scanHistory: [],
+        devStats: {
+          totalScans: 0,
+          totalTextFlags: 0,
+          totalImageFlags: 0,
+          totalVideoFlags: 0,
+          totalScoreSum: 0,
+          lastScanAt: null,
+          lastScanUrl: ""
+        }
       });
     }
 
@@ -88,6 +97,63 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
     });
   });
 });
+
+// Resolve the backend base URL from settings. Cloud mode stores a full
+// endpoint like "https://api.rinse.app/v1" or "http://localhost:5001/predict";
+// the health probe always lives at {base}/health.
+function resolveBackendBaseUrl(settings) {
+  let base = (settings.apiUrl || "http://localhost:5001").trim();
+  base = base.replace(/\/predict(\/.*)?$/, ""); // strip /predict or /predict/... suffixes
+  base = base.replace(/\/+$/, "");
+  return base || "http://localhost:5001";
+}
+
+// Ping the backend /health endpoint, measure latency, and cache the result
+// in chrome.storage.local so the popup can render it instantly.
+function checkBackendHealth(sendResponse) {
+  chrome.storage.local.get(["settings"], (result) => {
+    const settings = result.settings || {};
+    const base = resolveBackendBaseUrl(settings);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    const startedAt = performance.now();
+
+    fetch(`${base}/health`, { method: "GET", signal: controller.signal })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        clearTimeout(timeout);
+        const status = {
+          connected: true,
+          url: base,
+          latencyMs: Math.round(performance.now() - startedAt),
+          server: data,
+          error: null,
+          checkedAt: Date.now()
+        };
+        chrome.storage.local.set({ backendStatus: status }, () => {
+          console.log("RINSE backend health:", status);
+          if (sendResponse) sendResponse({ status: "success", data: status });
+        });
+      })
+      .catch((err) => {
+        clearTimeout(timeout);
+        const status = {
+          connected: false,
+          url: base,
+          latencyMs: null,
+          server: null,
+          error: err.name === "AbortError" ? "timeout" : err.message,
+          checkedAt: Date.now()
+        };
+        chrome.storage.local.set({ backendStatus: status }, () => {
+          if (sendResponse) sendResponse({ status: "success", data: status });
+        });
+      });
+  });
+}
 
 // Query /api/v1/me on the web app to verify subscription status
 function checkSubscriptionStatus(sendResponse) {
@@ -223,7 +289,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   
   else if (request.action === "saveScan") {
-    chrome.storage.local.get(["scanHistory"], (result) => {
+    chrome.storage.local.get(["scanHistory", "devStats"], (result) => {
       let history = result.scanHistory || [];
       
       // Prevent duplicates of the same URL by removing prior entries
@@ -243,8 +309,56 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         history = history.slice(0, 50);
       }
       
-      chrome.storage.local.set({ scanHistory: history }, () => {
+      // Cumulative dev counters (survive the 50-item history cap)
+      const stats = request.data.stats || {};
+      const prev = result.devStats || {};
+      const devStats = {
+        totalScans: (prev.totalScans || 0) + 1,
+        totalTextFlags: (prev.totalTextFlags || 0) + (stats.textCount || 0),
+        totalImageFlags: (prev.totalImageFlags || 0) + (stats.imageCount || 0),
+        totalVideoFlags: (prev.totalVideoFlags || 0) + (stats.videoCount || 0),
+        totalScoreSum: (prev.totalScoreSum || 0) + (request.data.score || 0),
+        lastScanAt: Date.now(),
+        lastScanUrl: request.data.url || ""
+      };
+      
+      chrome.storage.local.set({ scanHistory: history, devStats: devStats }, () => {
         sendResponse({ status: "success", history: history });
+      });
+    });
+    return true; // Keep message channel open for async response
+  }
+  
+  else if (request.action === "checkBackend") {
+    checkBackendHealth((response) => {
+      sendResponse(response);
+    });
+    return true; // Keep message channel open for async response
+  }
+  
+  else if (request.action === "getDevStats") {
+    chrome.storage.local.get(["devStats", "scanHistory", "settings", "extensionEnabled", "backendStatus"], (result) => {
+      const devStats = result.devStats || {};
+      const settings = result.settings || {};
+      sendResponse({
+        status: "success",
+        data: {
+          backend: result.backendStatus || null,
+          extensionEnabled: result.extensionEnabled !== false,
+          apiMode: settings.apiMode || "local",
+          apiUrl: settings.apiUrl || "",
+          sensitivity: settings.sensitivity ?? 50,
+          stats: {
+            totalScans: devStats.totalScans || 0,
+            totalTextFlags: devStats.totalTextFlags || 0,
+            totalImageFlags: devStats.totalImageFlags || 0,
+            totalVideoFlags: devStats.totalVideoFlags || 0,
+            totalScoreSum: devStats.totalScoreSum || 0,
+            lastScanAt: devStats.lastScanAt || null,
+            lastScanUrl: devStats.lastScanUrl || "",
+            recentScans: (result.scanHistory || []).length
+          }
+        }
       });
     });
     return true; // Keep message channel open for async response
@@ -256,10 +370,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const settings = result.settings || {};
       
       const apiMode = settings.apiMode;
-      if (apiMode === "cloud") {
-        const apiEndpoint = settings.apiUrl || "http://localhost:5001/predict";
-        
-        fetch(apiEndpoint, {
+      if (apiMode === "cloud") {      const apiEndpoint = settings.apiUrl || "http://localhost:5001/predict";
+
+      // Guard: reject blob: and non-http URLs early — the backend only accepts
+      // http(s) or data: URIs, so anything else would 400.
+      if (imgUrl.startsWith("blob:") || (!imgUrl.startsWith("data:") && !imgUrl.startsWith("http://") && !imgUrl.startsWith("https://"))) {
+        runLocalHeuristics(imgUrl, sendResponse);
+        return;
+      }
+
+      fetch(apiEndpoint, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -274,10 +394,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           if (!res.ok) throw new Error("HTTP error " + res.status);
           return res.json();
         })
+        .then(res => {
+          if (!res.ok) {
+            console.warn("Cloud detector returned HTTP", res.status, "— falling back to local heuristics");
+            runLocalHeuristics(imgUrl, sendResponse);
+            return;
+          }
+          return res.json();
+        })
         .then(data => {
+          if (!data) return; // Already handled above
           sendResponse({
             status: "success",
-            found: true, // Always return successful cloud API response
+            found: true,
             score: data.score,
             reasons: data.reasons || ["Detected via cloud service."],
             url: imgUrl
@@ -290,6 +419,119 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       } else {
         runLocalHeuristics(imgUrl, sendResponse);
       }
+    });
+    return true; // Keep message channel open for async response
+  }
+  
+  else if (request.action === "analyzeVideoFrames") {
+    // Cloud-mode video analysis: send browser-extracted frames to the backend's
+    // /predict/video/deep endpoint for the full spatio-temporal ensemble. The
+    // frames are a contiguous native-rate capture and frameIntervalSeconds is
+    // the real per-frame spacing - without it the backend disables the
+    // temporal layers rather than voting on aliased data.
+    chrome.storage.local.get(["settings"], (result) => {
+      const settings = result.settings || {};
+      const frames = request.frames || [];
+      if (settings.apiMode !== "cloud" || frames.length < 3) {
+        sendResponse({ status: "success", found: false });
+        return;
+      }
+      const raw = (settings.apiUrl || "http://localhost:5001").trim();
+      const base = raw.replace(/\/predict(\/.*)?$/, "").replace(/\/+$/, "");
+      const apiEndpoint = `${base}/predict/video/deep`;
+      const payload = { frames_base64: frames };
+      if (typeof request.frameIntervalSeconds === "number" &&
+          isFinite(request.frameIntervalSeconds) && request.frameIntervalSeconds > 0 &&
+          request.frameIntervalSeconds <= 0.5) {
+        payload.frame_interval_seconds = request.frameIntervalSeconds;
+      }
+      fetch(apiEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(settings.apiKey ? { "Authorization": `Bearer ${settings.apiKey}` } : {})
+        },
+        body: JSON.stringify(payload)
+      })
+      .then(async (res) => {
+        if (!res.ok) {
+          // Parse the backend's JSON error so the user sees the real cause.
+          let msg = "Server returned HTTP " + res.status + ".";
+          try {
+            const j = await res.json();
+            if (j && j.error) msg = j.error + (j.hint ? ` (${j.hint})` : "");
+          } catch { /* non-JSON error body */ }
+          throw Object.assign(new Error(msg), { handled: true });
+        }
+        return res.json();
+      })
+      .then((data) => {
+        sendResponse({
+          status: "success",
+          found: true,
+          score: data.score,
+          tier: data.tier,
+          confidence: data.confidence,
+          reasons: data.reasons || ["Analyzed via cloud spatio-temporal ensemble."],
+          url: request.url
+        });
+      })
+      .catch((err) => {
+        const detail = err && err.message ? err.message : "Video analysis failed.";
+        console.warn("Cloud video analysis failed:", detail);
+        sendResponse({ status: "success", found: false, error: detail });
+      });
+    });
+    return true; // Keep message channel open for async response
+  }
+
+  else if (request.action === "analyzeVideoUrl") {
+    // Cloud-mode fallback for videos whose frames cannot be extracted in the
+    // browser (CORS-tainted cross-origin players). The backend fetches the
+    // source itself and resolves platform pages via yt-dlp when installed.
+    chrome.storage.local.get(["settings"], (result) => {
+      const settings = result.settings || {};
+      if (settings.apiMode !== "cloud" || !request.url) {
+        sendResponse({ status: "success", found: false });
+        return;
+      }
+      const raw = (settings.apiUrl || "http://localhost:5001").trim();
+      const base = raw.replace(/\/predict(\/.*)?$/, "").replace(/\/+$/, "");
+      fetch(`${base}/predict/video/deep`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(settings.apiKey ? { "Authorization": `Bearer ${settings.apiKey}` } : {})
+        },
+        body: JSON.stringify({ video_url: request.url })
+      })
+      .then(async (res) => {
+        if (!res.ok) {
+          let msg = "Server returned HTTP " + res.status + ".";
+          try {
+            const j = await res.json();
+            if (j && j.error) msg = j.error + (j.hint ? ` (${j.hint})` : "");
+          } catch { /* non-JSON error body */ }
+          throw Object.assign(new Error(msg), { handled: true });
+        }
+        return res.json();
+      })
+      .then((data) => {
+        sendResponse({
+          status: "success",
+          found: true,
+          score: data.score,
+          tier: data.tier,
+          confidence: data.confidence,
+          reasons: data.reasons || ["Analyzed via cloud spatio-temporal ensemble."],
+          url: request.url
+        });
+      })
+      .catch((err) => {
+        const detail = err && err.message ? err.message : "Server-side video fetch failed.";
+        console.warn("Cloud video URL analysis failed:", detail);
+        sendResponse({ status: "success", found: false, error: detail });
+      });
     });
     return true; // Keep message channel open for async response
   }
@@ -409,6 +651,10 @@ const KNOWN_AI_ARTWORK_FINGERPRINTS = [
     dhash: "64a425353458d269"
   },
   {
+    label: "Tung Tung Tung Sahur news/video still (viral AI-generated meme character)",
+    dhash: "4a4b0b2e2d2e3e3e"
+  },
+  {
     label: "Viral AI-generated receipt artwork (Webflow CDN)",
     dhash: "232b2b2f230f2b27"
   }
@@ -493,21 +739,24 @@ async function analyzeFlatRenderSignature(imgUrl, partialBytes, partialComplete)
     }
 
     // Flat synthetic palette signature. Saturation is scale-invariant and is the
-    // key gate: genuine flat renders sit well above 0.6 while dark-table photos of
+    // key gate: genuine flat renders sit above 0.5 while dark-table photos of
     // receipts stay around 0.5-0.6 (calibrated at 256px; mirrored in server.py).
-    if (buckets.size < 700 && satMean > 0.6) {
-      return {
-        score: 70,
-        reasons: [
-          `Flat synthetic palette signature: only ${buckets.size} distinct colors with ${Math.round(satMean * 100)}% saturation at ${w}x${h}px - typical of cel-shaded AI-generated character art, not camera photos.`
-        ]
-      };
-    }
+    // A strict AND over every feature misses news/video stills of AI toon
+    // characters: heavy JPEG recompression inflates edge noise, so the signature
+    // is a SATURATION GATE + scored soft signals instead:
+    //   gate:     mean saturation > 0.50 (camera photos rarely exceed this)
+    //   required: smooth shaded regions (smooth8 0.25-0.70) - large gradient-
+    //             shaded areas typical of 3D renders; real macro florals/fruit
+    //             are textured EVERYWHERE (smooth8 ~0.1) and fail this, while
+    //             blank/bokeh photos (smooth8 > 0.7) fail the upper bound
+    //   signals:  few distinct colors (< 700) - flat render palettes
+    //             sparse edges (edge_density < 0.10) - clean outlines
+    // 2/2 signals -> strong boost; 1/2 -> moderate boost.
+    let signals = 0;
+    const satGate = satMean > 0.50;
 
-    // Document-render signature: AI-generated receipts/tickets/documents have a
-    // perfectly smooth background (photos/scans always show texture or shadows)
-    // and soft anti-aliased type (real print has crisp high-contrast edges).
-    // Calibrated against real receipts/photos - identical thresholds to server.py.
+    // Smooth-region ratio: fraction of 8x8 patches with std < 8 (variance < 64),
+    // computed over luma below along with the existing flat (std < 3) ratio.
     const lumaArr = new Float32Array(w * h);
     for (let i = 0, idx = 0; i < px.length; i += 4, idx++) {
       lumaArr[idx] = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
@@ -531,8 +780,9 @@ async function analyzeFlatRenderSignature(imgUrl, partialBytes, partialComplete)
     const edgeDensity = edgePix / total;
     const edgeRatio = strong / Math.max(medium, 1);
 
-    // Flat-region ratio (8x8 patches with std < 3 => variance < 9)
-    let flat = 0, patches = 0;
+    // Flat-region ratio (8x8 patches with std < 3 => variance < 9) and
+    // smooth-region ratio (std < 8 => variance < 64).
+    let flat = 0, smooth8 = 0, patches = 0;
     for (let y = 0; y + 8 <= h; y += 8) {
       for (let x = 0; x + 8 <= w; x += 8) {
         patches++;
@@ -544,10 +794,40 @@ async function analyzeFlatRenderSignature(imgUrl, partialBytes, partialComplete)
           }
         }
         const mean = sum / 64;
-        if (sum2 / 64 - mean * mean < 9) flat++;
+        const variance = sum2 / 64 - mean * mean;
+        if (variance < 9) flat++;
+        if (variance < 64) smooth8++;
       }
     }
     const flatRatio = patches > 0 ? flat / patches : 0;
+    const smooth8Ratio = patches > 0 ? smooth8 / patches : 0;
+
+    if (satGate) {
+      if (buckets.size < 700) signals++;
+      if (edgeDensity < 0.10) signals++;
+      const smoothWindow = smooth8Ratio > 0.25 && smooth8Ratio < 0.70;
+      if (smoothWindow && signals >= 1) {
+        if (signals >= 2) {
+          return {
+            score: 80,
+            reasons: [
+              `Synthetic render signature: cel-shaded/3D-render palette (${buckets.size} distinct colors, ${Math.round(satMean * 100)}% saturation, sparse edges at ${Math.round(edgeDensity * 100)}% density, ${Math.round(smooth8Ratio * 100)}% smooth shaded regions) at ${w}x${h}px - AI toon/character art shows this exact color profile; camera photos - even saturated macro shots - keep dense texture edges instead.`
+            ]
+          };
+        }
+        return {
+          score: 60,
+          reasons: [
+            `Synthetic render signature (moderate): saturated image with a limited palette (${buckets.size} colors, ${Math.round(satMean * 100)}% saturation) and partially smooth shading (${Math.round(smooth8Ratio * 100)}% smooth regions, edge density ${Math.round(edgeDensity * 100)}%) at ${w}x${h}px - consistent with AI toon/3D-render character art, uncommon for camera photos.`
+          ]
+        };
+      }
+    }
+
+    // Document-render signature: AI-generated receipts/tickets/documents have a
+    // perfectly smooth background (photos/scans always show texture or shadows)
+    // and soft anti-aliased type (real print has crisp high-contrast edges).
+    // Calibrated against real receipts/photos - identical thresholds to server.py.
 
     // Border (background) region standard deviation
     const bw = Math.max(2, Math.floor(w / 20));

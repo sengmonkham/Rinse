@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Shield, ExternalLink, Scan, RefreshCw } from 'lucide-react';
+import { Shield, ExternalLink, Scan, RefreshCw, Server } from 'lucide-react';
 
 interface PopupSettings {
   enableTextScan: boolean;
@@ -8,6 +8,42 @@ interface PopupSettings {
   showInlineBadges: boolean;
   showVibecodedAlert: boolean;
   sensitivity: number;
+  apiMode: string;
+  apiUrl: string;
+}
+
+interface BackendStatus {
+  connected: boolean;
+  url: string;
+  latencyMs: number | null;
+  server: {
+    server?: string;
+    version?: string;
+    uptime_seconds?: number;
+    mode?: string;
+    detectzoo_loaded?: boolean;
+    layers?: string[];
+  } | null;
+  error: string | null;
+  checkedAt: number | null;
+}
+
+interface DevStatsData {
+  backend: BackendStatus | null;
+  extensionEnabled: boolean;
+  apiMode: string;
+  apiUrl: string;
+  sensitivity: number;
+  stats: {
+    totalScans: number;
+    totalTextFlags: number;
+    totalImageFlags: number;
+    totalVideoFlags: number;
+    totalScoreSum: number;
+    lastScanAt: number | null;
+    lastScanUrl: string;
+    recentScans: number;
+  };
 }
 
 const IS_CHROME_EXT =
@@ -23,6 +59,24 @@ const DEFAULT_SETTINGS: PopupSettings = {
   showInlineBadges: true,
   showVibecodedAlert: false,
   sensitivity: 50,
+  apiMode: 'local',
+  apiUrl: '',
+};
+
+const formatRelativeTime = (ts: number): string => {
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return 'just now';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
+};
+
+const formatUptime = (seconds?: number): string => {
+  if (seconds == null) return '';
+  if (seconds < 60) return `${Math.round(seconds)}s up`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m up`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h up`;
+  return `${Math.floor(seconds / 86400)}d up`;
 };
 
 export default function Popup() {
@@ -32,6 +86,24 @@ export default function Popup() {
   const [scanCount, setScanCount] = useState(0);
   const [currentTab, setCurrentTab] = useState({ title: '', url: '' });
   const [settings, setSettings] = useState<PopupSettings>(DEFAULT_SETTINGS);
+  const [devStats, setDevStats] = useState<DevStatsData>({
+    backend: null,
+    extensionEnabled: true,
+    apiMode: 'local',
+    apiUrl: '',
+    sensitivity: 50,
+    stats: {
+      totalScans: 0,
+      totalTextFlags: 0,
+      totalImageFlags: 0,
+      totalVideoFlags: 0,
+      totalScoreSum: 0,
+      lastScanAt: null,
+      lastScanUrl: '',
+      recentScans: 0
+    }
+  });
+  const [checkingBackend, setCheckingBackend] = useState(false);
 
   // Load state on mount
   useEffect(() => {
@@ -50,7 +122,16 @@ export default function Popup() {
           showInlineBadges: result.settings.showInlineBadges ?? true,
           showVibecodedAlert: result.settings.showVibecodedAlert ?? false,
           sensitivity: result.settings.sensitivity ?? 50,
+          apiMode: result.settings.apiMode ?? 'local',
+          apiUrl: result.settings.apiUrl ?? '',
         });
+      }
+    });
+
+    // Load dev stats (backend connection status + cumulative counters)
+    chrome.runtime.sendMessage({ action: 'getDevStats' }, (response: MessageResponse) => {
+      if (response?.status === 'success' && response.data) {
+        setDevStats(response.data as DevStatsData);
       }
     });
 
@@ -159,7 +240,18 @@ export default function Popup() {
     });
   }, [scanning, settings.enableTextScan, settings.enableImageScan, settings.enableVideoScan]);
 
-  // Open full dashboard in new tab
+  // Re-ping the backend health endpoint
+  const handleCheckBackend = useCallback(() => {
+    if (!IS_CHROME_EXT || checkingBackend) return;
+    setCheckingBackend(true);
+    chrome.runtime.sendMessage({ action: 'checkBackend' }, (response: MessageResponse) => {
+      setCheckingBackend(false);
+      if (response?.status === 'success' && response.data) {
+        setDevStats(prev => ({ ...prev, backend: response.data as BackendStatus }));
+      }
+    });
+  }, [checkingBackend]);
+
   const handleOpenDashboard = useCallback(() => {
     if (IS_CHROME_EXT) {
       const dashboardUrl = chrome.runtime.getURL('index.html');
@@ -308,6 +400,105 @@ export default function Popup() {
           </label>
         </div>
       </div>
+
+      {/* Dev Tools (backend connectivity + stats) */}
+      {IS_CHROME_EXT && (
+        <div className="popup-dev">
+          <div className="popup-dev-header">
+            <span className="popup-dev-title">
+              <Server size={11} />
+              DEV TOOLS
+            </span>
+            <button
+              className="popup-dev-retest"
+              onClick={handleCheckBackend}
+              disabled={checkingBackend}
+            >
+              <RefreshCw size={10} className={checkingBackend ? 'popup-spinner-icon' : ''} />
+              {checkingBackend ? 'Testing...' : 'Re-test'}
+            </button>
+          </div>
+
+          {/* Backend connection */}
+          <div className="popup-dev-row">
+            <span className="popup-dev-label">Backend</span>
+            <span className="popup-dev-value">
+              <span className={`popup-dev-dot ${devStats.backend ? (devStats.backend.connected ? 'ok' : 'err') : 'idle'}`} />
+              {devStats.backend === null ? 'Unknown' : devStats.backend.connected ? 'Connected' : 'Not connected'}
+            </span>
+          </div>
+          {devStats.backend && (
+            <>
+              <div className="popup-dev-row">
+                <span className="popup-dev-label">Endpoint</span>
+                <span className="popup-dev-value popup-dev-url" title={devStats.backend.url}>
+                  {devStats.backend.url}
+                </span>
+              </div>
+              {devStats.backend.connected && devStats.backend.server ? (
+                <>
+                  <div className="popup-dev-row">
+                    <span className="popup-dev-label">Latency</span>
+                    <span className="popup-dev-value">{devStats.backend.latencyMs != null ? `${devStats.backend.latencyMs} ms` : '—'}</span>
+                  </div>
+                  <div className="popup-dev-row">
+                    <span className="popup-dev-label">Server</span>
+                    <span className="popup-dev-value">
+                      v{devStats.backend.server.version ?? '?'} · {devStats.backend.server.mode ?? 'heuristic'} · {formatUptime(devStats.backend.server.uptime_seconds) || '—'}
+                    </span>
+                  </div>
+                  <div className="popup-dev-row">
+                    <span className="popup-dev-label">DetectZoo</span>
+                    <span className="popup-dev-value">{devStats.backend.server.detectzoo_loaded ? 'loaded' : 'fallback'}</span>
+                  </div>
+                </>
+              ) : (
+                <div className="popup-dev-row">
+                  <span className="popup-dev-label">Error</span>
+                  <span className="popup-dev-value popup-dev-err">{devStats.backend.error ?? 'failed'}</span>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Engine mode */}
+          <div className="popup-dev-row">
+            <span className="popup-dev-label">Engine</span>
+            <span className="popup-dev-value popup-dev-url" title={devStats.apiUrl}>
+              {devStats.apiMode === 'cloud' ? (devStats.apiUrl ? `Cloud API · ${devStats.apiUrl}` : 'Cloud API') : 'Heuristics (Offline)'}
+            </span>
+          </div>
+
+          {/* Scan stats */}
+          <div className="popup-dev-stats">
+            <div className="popup-dev-stat">
+              <span className="popup-dev-stat-num">{devStats.stats.totalScans}</span>
+              <span className="popup-dev-stat-label">SCANS</span>
+            </div>
+            <div className="popup-dev-stat">
+              <span className="popup-dev-stat-num">{devStats.stats.totalTextFlags}</span>
+              <span className="popup-dev-stat-label">TEXT</span>
+            </div>
+            <div className="popup-dev-stat">
+              <span className="popup-dev-stat-num">{devStats.stats.totalImageFlags}</span>
+              <span className="popup-dev-stat-label">IMG</span>
+            </div>
+            <div className="popup-dev-stat">
+              <span className="popup-dev-stat-num">{devStats.stats.totalVideoFlags}</span>
+              <span className="popup-dev-stat-label">VID</span>
+            </div>
+          </div>
+
+          {devStats.stats.lastScanAt && (
+            <div className="popup-dev-row">
+              <span className="popup-dev-label">Last scan</span>
+              <span className="popup-dev-value popup-dev-url" title={devStats.stats.lastScanUrl || ''}>
+                {formatRelativeTime(devStats.stats.lastScanAt)}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Scan Button */}
       <button

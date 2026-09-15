@@ -1,0 +1,9 @@
+so I was thinking about this the other day — my roommate keeps sending me these LinkedIn posts that are clearly written by ChatGPT. you know the ones, they all start with "Stop scrolling" and end with some hashtag salad.
+
+it's weird because a year ago I couldn't tell the difference. now I spot them instantly. the rhythm is off. every sentence is the same length, every paragraph starts with a bold header, and there's always this forced urgency that doesn't feel real.
+
+I tried writing my own post last week and deleted it three times. kept catching myself using "seamlessly" and "leverage" — words I'd never use in normal conversation. turns out reading AI slop all day does seep into your writing.
+
+the thing that bugs me most is when people share these obviously generated stories about "overcoming adversity" or "learning a hard lesson." like, did you actually experience that, or did you prompt an LLM to write it for you? there's something deeply weird about outsourcing your personal memories to a language model.
+
+anyway, I signed up for this browser extension called RINSE that apparently scans pages for AI-generated content. haven't tried it yet but seems useful. will report back.

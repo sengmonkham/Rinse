@@ -33,9 +33,10 @@ TAXONOMY_PATH = BASE_DIR / "data" / "taxonomy.json"
 MODEL_PATH = BASE_DIR / "data" / "model_full.json"
 STATS_PATH = BASE_DIR / "data" / "model_stats.json"
 
-# Very short texts are far outside StoryScope's training distribution
-# (stories of ~5,000 words) and yield unreliable verdicts.
-MIN_CHARS = 200
+# Short texts are outside StoryScope's training distribution
+# (stories of ~5,000 words). Below this threshold we fall back to
+# DNA-DetectLLM which works from 20 chars.
+MIN_CHARS = 80
 
 _state: Optional[Dict[str, Any]] = None
 
