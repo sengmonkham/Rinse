@@ -1,50 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { 
-  Sparkles, 
-  Globe,
-  RefreshCw
+  Sparkles
 } from 'lucide-react';
-import DetectorDashboard from './components/DetectorDashboard';
-import ContentList from './components/ContentList';
 import Playground from './components/Playground';
 import PageHistory from './components/PageHistory';
 import Settings from './components/Settings';
-import ProofOfWork from './components/ProofOfWork';
 import Popup from './components/Popup';
 
 // Detect popup mode: Chrome extension popup appends #popup to the URL
 const IS_POPUP = typeof window !== 'undefined' && window.location.hash === '#popup';
-
-export interface ScanStats {
-  textCount: number;
-  imageCount: number;
-  videoCount: number;
-}
-
-export interface ScanItem {
-  id: string;
-  score: number;
-  reasons: string[];
-  snippet?: string;
-  tagName?: string;
-  src?: string;
-  width?: number;
-  height?: number;
-}
-
-export interface ScanResults {
-  text: ScanItem[];
-  images: ScanItem[];
-  videos: ScanItem[];
-  score: number;
-  scannedAt: number | null;
-  vibecoded?: {
-    isVibecoded: boolean;
-    reasons: string[];
-    hasPurpleGradient: boolean;
-    hasBubbleHeader: boolean;
-  };
-}
 
 export interface SubscriptionState {
   isPaying: boolean;
@@ -100,24 +64,7 @@ export default function App() {
     return <Popup />;
   }
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'inspector' | 'playground' | 'history' | 'settings' | 'pow'>('dashboard');
-  const [currentUrl, setCurrentUrl] = useState("Local Dashboard Preview");
-  const [currentTitle, setCurrentTitle] = useState("Standalone Simulator");
-  const [scanning, setScanning] = useState(false);
-  
-  const [scanResults, setScanResults] = useState<ScanResults>({
-    text: [],
-    images: [],
-    videos: [],
-    score: 100,
-    scannedAt: null,
-    vibecoded: {
-      isVibecoded: false,
-      reasons: [],
-      hasPurpleGradient: false,
-      hasBubbleHeader: false
-    }
-  });
+  const [activeTab, setActiveTab] = useState<'playground' | 'history' | 'settings'>('playground');
 
   const [settings, setSettings] = useState<AppSettings>(() => {
     if (typeof window === "undefined") return DEFAULT_SETTINGS;
@@ -157,63 +104,18 @@ export default function App() {
     }
     return [];
   });
-  const [aiHidden, setAiHidden] = useState(false);
 
   // Detect mode & initialize
   useEffect(() => {
     if (IS_CHROME_EXT) {
-      // 1. Get current active tab info
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs: ChromeTabInfo[]) => {
-        const tab = tabs[0];
-        if (tab && tab.url) {
-          // Ignore chrome:// internal pages
-          if (tab.url.startsWith("chrome://") || tab.url.startsWith("chrome-extension://")) {
-            setCurrentUrl("Chrome Internal Page");
-            setCurrentTitle("Scanning disabled on System Pages");
-            setScanResults({
-              text: [],
-              images: [],
-              videos: [],
-              score: 100,
-              scannedAt: Date.now(),
-              vibecoded: {
-                isVibecoded: false,
-                reasons: [],
-                hasPurpleGradient: false,
-                hasBubbleHeader: false
-              }
-            });
-            return;
-          }
-          setCurrentUrl(tab.url);
-          setCurrentTitle(tab.title || new URL(tab.url).hostname);
-          
-          // Request status from active content script
-          chrome.tabs.sendMessage(tab.id!, { action: "getPageStatus" }, (response: MessageResponse) => {
-            if (chrome.runtime.lastError) {
-              console.log("No content script listener found. (Needs manual scan trigger)");
-            } else if (response && response.status === "success") {
-              setScanResults(response.data as ScanResults);
-            }
-          });
-
-          // Request hidden status from active content script
-          chrome.tabs.sendMessage(tab.id!, { action: "getHideAIStatus" }, (response: MessageResponse) => {
-            if (!chrome.runtime.lastError && response && response.status === "success") {
-              setAiHidden(response.isHidden ?? false);
-            }
-          });
-        }
-      });
-
-      // 2. Load settings, subscription and history from extension local storage
+      // Load settings, subscription and history from extension local storage
       chrome.storage.local.get(["settings", "scanHistory", "subscriptionState"], (result: Record<string, unknown>) => {
         if (result.settings) setSettings(result.settings as AppSettings);
         if (result.scanHistory) setScanHistory(result.scanHistory as ScanHistoryEntry[]);
         if (result.subscriptionState) setSubscription(result.subscriptionState as SubscriptionState);
       });
     }
-    // Standalone mode: settings, subscription and history load lazily from localStorage above; initial scan state is neutral.
+    // Standalone mode: settings, subscription and history load lazily from localStorage above.
   }, []);
 
   // Sync subscription status with web app
@@ -303,96 +205,6 @@ export default function App() {
     }
   }, []);
 
-  // Trigger quick page scan
-  const triggerScan = useCallback(() => {
-    if (scanning) return;
-    setScanning(true);
-    
-    if (!IS_STANDALONE) {
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs: ChromeTabInfo[]) => {
-        const tab = tabs[0];
-        if (tab && tab.id) {
-          chrome.tabs.sendMessage(tab.id, { 
-            action: "runScan", 
-            options: {
-              text: settings.enableTextScan,
-              images: settings.enableImageScan,
-              videos: settings.enableVideoScan
-            } 
-          }, (response: MessageResponse) => {
-            setScanning(false);
-            if (response && response.status === "success") {
-              setScanResults(response.data as ScanResults);
-              // Refresh history
-              chrome.storage.local.get(["scanHistory"], (result: Record<string, unknown>) => {
-                if (result.scanHistory) setScanHistory(result.scanHistory as ScanHistoryEntry[]);
-              });
-            } else {
-              alert("Could not communicate with the page. Try refreshing the webpage.");
-            }
-          });
-        }
-      });
-    } else {
-      setTimeout(() => {
-        setScanning(false);
-        alert("Please load RINSE as an unpacked Chrome Extension to scan active webpages. For quick tests, use the 'Sandbox' tab!");
-      }, 500);
-    }
-  }, [scanning, settings.enableTextScan, settings.enableImageScan, settings.enableVideoScan]);
-
-  // Trigger visual deep scan laser animation
-  const triggerDeepScan = useCallback(() => {
-    if (scanning) return;
-    setScanning(true);
-
-    if (!IS_STANDALONE) {
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs: ChromeTabInfo[]) => {
-        const tab = tabs[0];
-        if (tab && tab.id) {
-          // Close popup window so they see scan? 
-          // Better to just let it run. In Chrome, keeping popup open works, or we can send message.
-          chrome.tabs.sendMessage(tab.id, { action: "runDeepScan" }, (response: MessageResponse) => {
-            setScanning(false);
-            if (response && response.status === "success") {
-              setScanResults(response.data as ScanResults);
-              chrome.storage.local.get(["scanHistory"], (result: Record<string, unknown>) => {
-                if (result.scanHistory) setScanHistory(result.scanHistory as ScanHistoryEntry[]);
-              });
-            } else {
-              alert("Error executing scan. Make sure the page is fully loaded.");
-            }
-          });
-        }
-      });
-    } else {
-      setTimeout(() => {
-        setScanning(false);
-        alert("Please load RINSE as an unpacked Chrome Extension to run deep visual scans on web tabs.");
-      }, 500);
-    }
-  }, [scanning]);
-
-  // Toggle hiding AI generated content
-  const handleToggleHideAI = useCallback(() => {
-    if (IS_STANDALONE) {
-      alert("Please load RINSE as an unpacked Chrome Extension to toggle content visibility.");
-      setAiHidden(prev => !prev);
-      return;
-    }
-    const nextHidden = !aiHidden;
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs: ChromeTabInfo[]) => {
-      const tab = tabs[0];
-      if (tab && tab.id) {
-        chrome.tabs.sendMessage(tab.id, { action: "toggleHideAI", hide: nextHidden }, (response: MessageResponse) => {
-          if (response && response.status === "success") {
-            setAiHidden(response.isHidden ?? false);
-          }
-        });
-      }
-    });
-  }, [aiHidden]);
-
   // Clear history items
   const handleClearHistory = useCallback(() => {
     if (!IS_STANDALONE) {
@@ -419,49 +231,16 @@ export default function App() {
             </span>
           )}
         </div>
-        <div className="dashboard-header-right">
-          {activeTab !== 'playground' && activeTab !== 'settings' && activeTab !== 'pow' && (
-            <div className="dashboard-page-info">
-              <Globe size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-              <span className="dashboard-page-title">{currentTitle}</span>
-              <button
-                onClick={triggerScan}
-                disabled={scanning || currentUrl === 'Chrome Internal Page'}
-                className="dashboard-scan-mini"
-                title="Scan page"
-              >
-                <RefreshCw size={12} className={scanning ? 'pulse-glow' : ''} />
-              </button>
-            </div>
-          )}
-        </div>
+        <div className="dashboard-header-right"></div>
       </header>
 
       {/* Tab Navigation */}
       <nav className="dashboard-tabs">
         <button
-          onClick={() => setActiveTab('dashboard')}
-          className={`dashboard-tab ${activeTab === 'dashboard' ? 'active' : ''}`}
-        >
-          Dashboard
-        </button>
-        <button
-          onClick={() => setActiveTab('inspector')}
-          className={`dashboard-tab ${activeTab === 'inspector' ? 'active' : ''}`}
-        >
-          Matches
-        </button>
-        <button
           onClick={() => setActiveTab('playground')}
           className={`dashboard-tab ${activeTab === 'playground' ? 'active' : ''}`}
         >
           Sandbox
-        </button>
-        <button
-          onClick={() => setActiveTab('pow')}
-          className={`dashboard-tab ${activeTab === 'pow' ? 'active' : ''}`}
-        >
-          Writer POW
         </button>
         <button
           onClick={() => setActiveTab('history')}
@@ -479,27 +258,8 @@ export default function App() {
 
       {/* Active Tab View */}
       <main className="dashboard-content">
-        {activeTab === 'dashboard' && (
-          <DetectorDashboard 
-            scanResults={scanResults} 
-            scanning={scanning} 
-            onScanQuick={triggerScan} 
-            onScanDeep={triggerDeepScan}
-            disabled={currentUrl === "Chrome Internal Page"}
-            aiHidden={aiHidden}
-            onToggleHideAI={handleToggleHideAI}
-          />
-        )}
-        {activeTab === 'inspector' && (
-          <ContentList 
-            scanResults={scanResults} 
-          />
-        )}
         {activeTab === 'playground' && (
           <Playground settings={settings} />
-        )}
-        {activeTab === 'pow' && (
-          <ProofOfWork />
         )}
         {activeTab === 'history' && (
           <PageHistory 

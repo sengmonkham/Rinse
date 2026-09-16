@@ -312,11 +312,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       // Cumulative dev counters (survive the 50-item history cap)
       const stats = request.data.stats || {};
       const prev = result.devStats || {};
+      // A scan "found AI" when at least one item was flagged at 55+ (the
+      // badge/flagging threshold) - text, image, or video.
+      const foundAi = (stats.textCount || 0) + (stats.imageCount || 0) + (stats.videoCount || 0) > 0;
       const devStats = {
         totalScans: (prev.totalScans || 0) + 1,
         totalTextFlags: (prev.totalTextFlags || 0) + (stats.textCount || 0),
         totalImageFlags: (prev.totalImageFlags || 0) + (stats.imageCount || 0),
         totalVideoFlags: (prev.totalVideoFlags || 0) + (stats.videoCount || 0),
+        scansWithAi: (prev.scansWithAi || 0) + (foundAi ? 1 : 0),
         totalScoreSum: (prev.totalScoreSum || 0) + (request.data.score || 0),
         lastScanAt: Date.now(),
         lastScanUrl: request.data.url || ""
@@ -353,6 +357,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             totalTextFlags: devStats.totalTextFlags || 0,
             totalImageFlags: devStats.totalImageFlags || 0,
             totalVideoFlags: devStats.totalVideoFlags || 0,
+            scansWithAi: devStats.scansWithAi || 0,
             totalScoreSum: devStats.totalScoreSum || 0,
             lastScanAt: devStats.lastScanAt || null,
             lastScanUrl: devStats.lastScanUrl || "",
