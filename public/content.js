@@ -1412,16 +1412,17 @@ const analyzeTextHeuristics = (text) => {
   return null;
 };
 
-// Check image headers for generative AI tags (EXIF Metadata Reader)
+// Scan an image against the backend. ALL image analysis runs server-side —
+// this function never scores an image locally. When the backend is not
+// reachable the promise resolves with a connected:false result carrying the
+// "not connected" explanation instead of a fabricated score.
 const inspectImageMetadata = async (imgUrl) => {
-  if (!imgUrl || imgUrl.startsWith("data:") || imgUrl.startsWith("blob:")) {
-    return null;
-  }
+  if (!imgUrl) return null;
 
   // Resolve relative URLs to absolute. The backend only accepts http(s) URLs;
   // relative paths like '/images/photo.jpg' cause a 400 rejection.
   let absoluteUrl = imgUrl;
-  if (!imgUrl.startsWith("http://") && !imgUrl.startsWith("https://")) {
+  if (!imgUrl.startsWith("http://") && !imgUrl.startsWith("https://") && !imgUrl.startsWith("data:")) {
     try {
       absoluteUrl = new URL(imgUrl, window.location.href).href;
     } catch (e) {
@@ -1432,9 +1433,35 @@ const inspectImageMetadata = async (imgUrl) => {
   return new Promise((resolve) => {
     try {
       chrome.runtime.sendMessage({ action: "fetchImageMetadata", url: absoluteUrl }, (response) => {
-        if (response && response.status === "success" && response.found) {
+        if (chrome.runtime.lastError) {
+          resolve({
+            score: null,
+            unscanned: true,
+            reasons: ["Not connected to the internet — the detection backend could not be reached."],
+            url: imgUrl
+          });
+          return;
+        }
+        if (response && response.status === "backend_offline") {
+          resolve({
+            score: null,
+            unscanned: true,
+            connected: false,
+            reasons: [response.error || "Not connected to the internet — the detection backend is unreachable."],
+            url: imgUrl
+          });
+        } else if (response && response.status === "error") {
+          resolve({
+            score: null,
+            unscanned: true,
+            reasons: [response.error || "The backend could not analyze this image."],
+            url: imgUrl
+          });
+        } else if (response && response.status === "success" && response.found) {
           resolve({
             score: response.score,
+            tier: response.tier,
+            confidence: response.confidence,
             reasons: response.reasons,
             url: imgUrl
           });
@@ -1443,52 +1470,43 @@ const inspectImageMetadata = async (imgUrl) => {
         }
       });
     } catch (err) {
-      resolve(null);
+      resolve({
+        score: null,
+        unscanned: true,
+        reasons: ["Not connected to the internet — the detection backend could not be reached."],
+        url: imgUrl
+      });
     }
   });
 };
 
+// DOM-context signals ONLY (alt text / captions / URL markers visible on the
+// page). This performs no image analysis: it never inspects pixels, metadata
+// or headers — every actual image scan happens on the backend via
+// inspectImageMetadata. These are page-declared labels, not forensic results.
 const inspectImageDOMContext = (img) => {
   if (!img) return null;
   
   const reasons = [];
   let score = 0;
-  
+
   const alt = (img.alt || '').trim();
   const title = (img.title || '').trim();
+  const src = img.src || '';
+
   // Expanded keyword regex to cover more systems
   const aiKeywordRegex = /(\bai[- ]generated\b|generative|midjourney|dall-e|dalle|stable[- ]diffusion|flux[-.]1|adobe[- ]firefly|deepai|leonardo[- ]ai|civitai|flux[- ]ai|created (with|by) ai|made (with|by) ai)/i;
-  
+
+  // AI attribution declared by the page itself (alt text, title attribute).
+  // The backend never sees these page-local labels, so they are surfaced here
+  // as context — they are the page's own claims, not a scan result.
   if (alt && aiKeywordRegex.test(alt)) {
     score = Math.max(score, 98);
-    reasons.push(`AI attribution in alt text: "${alt}"`);
+    reasons.push(`AI attribution in alt text (page-declared, not a scan): "${alt}"`);
   }
   if (title && aiKeywordRegex.test(title)) {
     score = Math.max(score, 98);
-    reasons.push(`AI attribution in title tag: "${title}"`);
-  }
-  
-  // Prompt-like alt text heuristic
-  if (alt && alt.length >= 20) {
-    const promptKeywords = [
-      "photorealistic", "hyperrealistic", "highly detailed", "octane render", 
-      "unreal engine", "trending on artstation", "cinematic lighting", 
-      "masterpiece", "intricate details", "volumetric lighting", "ray tracing", 
-      "4k resolution", "8k resolution", "concept art", "sharp focus", "depth of field"
-    ];
-    const segments = alt.split(',').map(s => s.trim().toLowerCase());
-    if (segments.length >= 3) {
-      let matchedWords = [];
-      for (const kw of promptKeywords) {
-        if (alt.toLowerCase().includes(kw)) {
-          matchedWords.push(kw);
-        }
-      }
-      if (matchedWords.length >= 2) {
-        score = Math.max(score, 85);
-        reasons.push(`Alt text structured like an AI image prompt: contains comma-separated segments and prompt keywords [${matchedWords.join(", ")}]`);
-      }
-    }
+    reasons.push(`AI attribution in title attribute (page-declared, not a scan): "${title}"`);
   }
 
   const figure = img.closest('figure');
@@ -1525,78 +1543,58 @@ const inspectImageDOMContext = (img) => {
     reasons.push(`Element identifier indicates generative assets: '${idStr}'`);
   }
 
-  const src = img.src || '';
-  if (src.startsWith('data:')) {
-    try {
-      const binaryString = atob(src.split(',')[1].substring(0, 100000));
-      const aiTags = [
-        { term: "Stable Diffusion", source: "Stable Diffusion parameters" },
-        { term: "Midjourney", source: "Midjourney generation parameters" },
-        { term: "DALL-E", source: "DALL-E metadata" },
-        { term: "NovelAI", source: "NovelAI generator metadata" },
-        { term: "civitai", source: "CivitAI tags" },
-        { term: "Adobe Firefly", source: "Adobe Firefly creator signature" }
-      ];
-      for (const tag of aiTags) {
-        if (binaryString.includes(tag.term)) {
-          score = Math.max(score, 99);
-          reasons.push(`Base64 Header Signature: Detected '${tag.term}' (${tag.source})`);
-        }
-      }
-      // Fixed PNG space chunk signature bug
-      if (binaryString.includes("tEXtparameters") || binaryString.includes("zTXtparameters") || binaryString.includes("iTXtparameters") || binaryString.includes("tEXt parameters") || binaryString.includes("zTXt parameters")) {
-        score = Math.max(score, 95);
-        reasons.push("Base64 Header Signature: PNG metadata contains Stable Diffusion parameters chunk");
-      }
-    } catch (e) {}
-  } else {
-    const lowerSrc = src.toLowerCase();
+  // Page-declared URL markers only. The backend already inspects the actual
+  // image (metadata, pixels, forensics) — this is context about where the
+  // asset is hosted, visible in the page source itself. Skipped for data:/
+  // blob: sources, which are not URLs and were already sent to the backend.
+  if (!src.startsWith("data:") && !src.startsWith("blob:")) {
+  const lowerSrc = src.toLowerCase();
 
-    // Social media post context checker (e.g. Twitter/X articles, Reddit posts, LinkedIn updates)
-    const postContainer = img.closest('article, [class*="post"], [class*="tweet"], [id*="post"], [id*="tweet"], [data-testid="post-container"], [class*="feed-shared-update"], [data-view-name*="feed-item"], [class*="update-v2"]');
-    if (postContainer) {
-      const postText = (postContainer.innerText || postContainer.textContent || '').toLowerCase();
-      
-      // Check for hashtags or explicit AI mentions in the post text
-      const postKeywords = [
-        "ai generated", "ai-generated", "midjourney", "dall-e", "dalle", 
-        "stable diffusion", "stable-diffusion", "generative ai", "flux.1", 
-        "flux 1", "flux ai", "made with ai", "created with ai", "generated by ai", 
-        "ai art", "ai-art", "aiart", "#ai", "#midjourney", "#dalle", 
-        "#stablediffusion", "#aiart", "generated using ai", "ai illustration",
-        "synthetic media", "synthesized image", "deepseek", "gemini-generated",
-        "artificial intelligence", "#generativeai", "#aiartcommunity", "created by ai"
-      ];
-      
-      for (const kw of postKeywords) {
-        if (postText.includes(kw)) {
-          score = Math.max(score, 95);
-          reasons.push(`AI keyword/hashtag in containing post: "${kw}"`);
-          break;
-        }
-      }
-    }
+  // Social media post context checker (e.g. Twitter/X articles, Reddit posts, LinkedIn updates)
+  const postContainer = img.closest('article, [class*="post"], [class*="tweet"], [id*="post"], [id*="tweet"], [data-testid="post-container"], [class*="feed-shared-update"], [data-view-name*="feed-item"], [class*="update-v2"]');
+  if (postContainer) {
+    const postText = (postContainer.innerText || postContainer.textContent || '').toLowerCase();
 
-    // Expanded CDN & host domains
-    const aiKeywords = [
-      "midjourney", "stability", "dalle", "generated.photos", "firefly", "copilot", 
-      "leonardo", "synth", "generative", "replicate.delivery", "civitai", "flux-ai", 
-      "leonardo-cdn", "lexica.art", "playgroundai", "bing.com/images/create"
+    // Check for hashtags or explicit AI mentions in the post text
+    const postKeywords = [
+      "ai generated", "ai-generated", "midjourney", "dall-e", "dalle", 
+      "stable diffusion", "stable-diffusion", "generative ai", "flux.1", 
+      "flux 1", "flux ai", "made with ai", "created with ai", "generated by ai", 
+      "ai art", "ai-art", "aiart", "#ai", "#midjourney", "#dalle", 
+      "#stablediffusion", "#aiart", "generated using ai", "ai illustration",
+      "synthetic media", "synthesized image", "deepseek", "gemini-generated",
+      "artificial intelligence", "#generativeai", "#aiartcommunity", "created by ai"
     ];
-    for (const kw of aiKeywords) {
-      if (lowerSrc.includes(kw)) {
-        score = Math.max(score, 92);
-        reasons.push(`External CDN Host contains AI generative directory keywords: '${kw}'`);
+    
+    for (const kw of postKeywords) {
+      if (postText.includes(kw)) {
+        score = Math.max(score, 95);
+        reasons.push(`AI keyword/hashtag in containing post: "${kw}"`);
+        break;
       }
     }
+  }
 
-    // Midjourney and generic generator filename signature check
-    const uuidRegex = /([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i;
-    const isMidjourneyPattern = lowerSrc.includes("_grid_") || lowerSrc.includes("_v6_") || lowerSrc.includes("_v5_");
-    if (uuidRegex.test(src) && (isMidjourneyPattern || lowerSrc.includes("discordapp") || lowerSrc.includes("prompt"))) {
-      score = Math.max(score, 90);
-      reasons.push("Image filename matches generative platform ID signature pattern (UUID + platform tag)");
+  // Expanded CDN & host domains
+  const aiKeywords = [
+    "midjourney", "stability", "dalle", "generated.photos", "firefly", "copilot", 
+    "leonardo", "synth", "generative", "replicate.delivery", "civitai", "flux-ai", 
+    "leonardo-cdn", "lexica.art", "playgroundai", "bing.com/images/create"
+  ];
+  for (const kw of aiKeywords) {
+    if (lowerSrc.includes(kw)) {
+      score = Math.max(score, 92);
+      reasons.push(`External CDN Host contains AI generative directory keywords: '${kw}'`);
     }
+  }
+
+  // Midjourney and generic generator filename signature check
+  const uuidRegex = /([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i;
+  const isMidjourneyPattern = lowerSrc.includes("_grid_") || lowerSrc.includes("_v6_") || lowerSrc.includes("_v5_");
+  if (uuidRegex.test(src) && (isMidjourneyPattern || lowerSrc.includes("discordapp") || lowerSrc.includes("prompt"))) {
+    score = Math.max(score, 90);
+    reasons.push("Image filename matches generative platform ID signature pattern (UUID + platform tag)");
+  }
   }
 
   if (score > 0) {
@@ -1650,10 +1648,22 @@ const triggerLocalScan = async (element) => {
     }
   }
 
-  // 1. Image checks
+  // 1. Image checks — all actual analysis happens on the backend. DOM-context
+  // labels (page-declared AI attributions) may supplement the server verdict,
+  // but never replace it. Offline images are reported as "not connected".
   if (element.tagName === "IMG") {
-    showFloatingScannerTooltip("Analyzing image layers...", mouseX, mouseY);
+    showFloatingScannerTooltip("Analyzing image via backend...", mouseX, mouseY);
     let imgResult = await inspectImageMetadata(element.src);
+    if (imgResult && imgResult.score === null) {
+      // Backend unreachable or request failed — say so, no fabricated score.
+      showDiagnosticFloatingTooltip({
+        score: 0,
+        reasons: imgResult.reasons,
+        title: "IMAGE VERIFICATION — OFFLINE",
+        details: "Detection backend not connected. No local scan is performed."
+      }, mouseX, mouseY);
+      return;
+    }
     if (!imgResult) {
       imgResult = inspectImageDOMContext(element);
     } else {
@@ -1673,10 +1683,10 @@ const triggerLocalScan = async (element) => {
       }, mouseX, mouseY);
     } else {
       showDiagnosticFloatingTooltip({
-        score: 12,
-        reasons: ["No artificial metadata headers or signature frequency patterns discovered."],
+        score: 8,
+        reasons: ["Backend scan complete: no AI forensics flagged by the server, and no page-declared AI labels found."],
         title: "IMAGE VERIFICATION",
-        details: `Exif: Checked clean. Sources: Scanned.`
+        details: "Cloud forensic ensemble: clean."
       }, mouseX, mouseY);
     }
     return;
@@ -2172,8 +2182,27 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
       if (img.width < 50 || img.height < 50) continue;
       scannedCount++;
 
+      // Backend verdict first. DOM-context signals (page-declared AI labels
+      // in alt text / captions / URLs) are layered on top of the server score
+      // — they never replace a scan. A result with score: null means the
+      // backend was unreachable or the image unscannable: recorded honestly,
+      // no badge, no fabricated score.
       let imgResult = await inspectImageMetadata(img.src);
+      if (imgResult && imgResult.score === null) {
+        // Backend offline or request failed — record as unscanned.
+        scanResults.images.push({
+          id: "img-" + Math.random().toString(36).substr(2, 9),
+          score: null,
+          unscanned: true,
+          reasons: imgResult.reasons,
+          src: img.src,
+          width: img.naturalWidth || img.width,
+          height: img.naturalHeight || img.height
+        });
+        continue;
+      }
       if (!imgResult) {
+        // Backend reachable and answered, image judged clean by the server.
         imgResult = inspectImageDOMContext(img);
       } else {
         const domResult = inspectImageDOMContext(img);
@@ -2482,7 +2511,9 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
       // e.g. a spatial-only video scan with no temporal evidence) carry a
       // score but must not push the page score toward either extreme: they
       // count as scanned-but-unresolved, not as evidence of authenticity.
-      const itemInconclusive = item.tier === "INCONCLUSIVE";
+      // Unscanned items (score: null — backend offline / request failed) are
+      // scan failures, not evidence of authenticity either.
+      const itemInconclusive = item.tier === "INCONCLUSIVE" || item.score === null;
       if (item.score > 0 && !itemInconclusive) {
         maxAiScore = Math.max(maxAiScore, item.score);
         if (item.score >= 55) {
@@ -2508,8 +2539,12 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
       } else {
         // No flagged content - check if we scanned anything
         // If we scanned and found nothing suspicious, score stays high
-        // But if we couldn't scan (e.g., CORS issues), be conservative
-        const hadScanningFailures = allItems.some(item => item.score === 0 && item.reasons && item.reasons.length > 0);
+        // But if we couldn't scan (backend offline, CORS issues), be
+        // conservative: unscanned content is not evidence of authenticity.
+        const hadScanningFailures = allItems.some(item =>
+          (item.score === 0 && item.reasons && item.reasons.length > 0) ||
+          (item.score === null && item.unscanned)
+        );
         if (hadScanningFailures) {
           // We couldn't analyze some content - be slightly conservative
           finalScore = Math.max(70, finalScore - 10);
@@ -2893,17 +2928,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ status: "disabled" });
       return true;
     }
-    // Context Menu Trigger: analyze image source url
+    // Context Menu Trigger: analyze image source url (backend scan only)
     const imageUrl = request.url || "";
     if (imageUrl) {
       injectStyles();
       inspectImageMetadata(imageUrl).then(meta => {
-        showDiagnosticFloatingTooltip({
-          score: meta ? meta.score : 15,
-          reasons: meta ? meta.reasons : ["Exif search clean. No generative metadata tags detected."],
-          title: "SELECTED IMAGE AUDIT",
-          details: `Source: ${imageUrl.substring(0, 30)}...`
-        }, mouseX, mouseY);
+        if (meta && meta.score === null) {
+          showDiagnosticFloatingTooltip({
+            score: 0,
+            reasons: meta.reasons,
+            title: "SELECTED IMAGE AUDIT — OFFLINE",
+            details: "Detection backend not connected. No local scan is performed."
+          }, mouseX, mouseY);
+        } else {
+          showDiagnosticFloatingTooltip({
+            score: meta ? meta.score : 8,
+            reasons: meta ? meta.reasons : ["Backend scan complete: no AI forensics flagged by the server."],
+            title: "SELECTED IMAGE AUDIT",
+            details: `Source: ${imageUrl.substring(0, 30)}...`
+          }, mouseX, mouseY);
+        }
       });
     }
     sendResponse({ status: "success" });

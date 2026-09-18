@@ -155,6 +155,28 @@ function checkBackendHealth(sendResponse) {
   });
 }
 
+// Resolve whether the backend is currently reachable. Uses the cached /health
+// result when it is fresh (< 30s old); otherwise re-probes. Every analysis
+// request is gated on this so an unreachable backend is reported honestly
+// ("not connected") instead of silently falling back to local scanning.
+function ensureBackendConnected(callback) {
+  chrome.storage.local.get(["backendStatus"], (result) => {
+    const cached = result.backendStatus;
+    if (cached && cached.checkedAt && (Date.now() - cached.checkedAt) < 30000) {
+      callback({ connected: Boolean(cached.connected), server: cached.server, error: cached.error || null });
+      return;
+    }
+    checkBackendHealth((res) => {
+      const status = res && res.data ? res.data : null;
+      callback({
+        connected: Boolean(status && status.connected),
+        server: status ? status.server : null,
+        error: status ? status.error : "health check failed"
+      });
+    });
+  });
+}
+
 // Query /api/v1/me on the web app to verify subscription status
 function checkSubscriptionStatus(sendResponse) {
   chrome.storage.local.get(["settings", "subscriptionState"], (result) => {
@@ -370,60 +392,156 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   
   else if (request.action === "fetchImageMetadata") {
+    // Image analysis ALWAYS runs on the backend — there is intentionally no
+    // local fallback. When the backend cannot be reached the extension reports
+    // "not connected" instead of making up a verdict locally.
     const imgUrl = request.url;
     chrome.storage.local.get(["settings"], (result) => {
       const settings = result.settings || {};
-      
-      const apiMode = settings.apiMode;
-      if (apiMode === "cloud") {      const apiEndpoint = settings.apiUrl || "http://localhost:5001/predict";
 
-      // Guard: reject blob: and non-http URLs early — the backend only accepts
-      // http(s) or data: URIs, so anything else would 400.
-      if (imgUrl.startsWith("blob:") || (!imgUrl.startsWith("data:") && !imgUrl.startsWith("http://") && !imgUrl.startsWith("https://"))) {
-        runLocalHeuristics(imgUrl, sendResponse);
+      if (settings.apiMode !== "cloud") {
+        sendResponse({
+          status: "backend_offline",
+          found: false,
+          connected: false,
+          url: imgUrl,
+          error: "Heuristics (Offline) mode does not scan images — switch to Cloud Detector mode in Settings."
+        });
         return;
       }
 
-      fetch(apiEndpoint, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(settings.apiKey ? { "Authorization": `Bearer ${settings.apiKey}` } : {})
-          },
-          body: JSON.stringify({
-            image_url: imgUrl.startsWith("data:") ? null : imgUrl,
-            image_base64: imgUrl.startsWith("data:") ? imgUrl : null
-          })
-        })
-        .then(res => {
-          if (!res.ok) throw new Error("HTTP error " + res.status);
-          return res.json();
-        })
-        .then(res => {
-          if (!res.ok) {
-            console.warn("Cloud detector returned HTTP", res.status, "— falling back to local heuristics");
-            runLocalHeuristics(imgUrl, sendResponse);
-            return;
-          }
-          return res.json();
-        })
-        .then(data => {
-          if (!data) return; // Already handled above
-          sendResponse({
-            status: "success",
-            found: true,
-            score: data.score,
-            reasons: data.reasons || ["Detected via cloud service."],
-            url: imgUrl
-          });
-        })
-        .catch(err => {
-          console.error("Cloud detector failed, falling back to local heuristics:", err);
-          runLocalHeuristics(imgUrl, sendResponse);
+      const base = resolveBackendBaseUrl(settings);
+
+      // Guard: blob: URLs are session-local references the backend cannot
+      // fetch, and anything that is not http(s)/data: would be rejected 400.
+      if (imgUrl.startsWith("blob:") || (!imgUrl.startsWith("data:") && !imgUrl.startsWith("http://") && !imgUrl.startsWith("https://"))) {
+        sendResponse({
+          status: "error",
+          found: false,
+          url: imgUrl,
+          error: "This image uses a blob:/unsupported URL the backend cannot fetch — open it in a tab and scan it from the Playground."
         });
-      } else {
-        runLocalHeuristics(imgUrl, sendResponse);
+        return;
       }
+
+      // Always POST the deep path at {base}/predict. Normalizing the URL here
+      // (instead of using settings.apiUrl verbatim) fixes the flood of POST
+      // 404s when the configured URL has no /predict suffix (e.g. a bare
+      // "http://localhost:5001" or a trailing slash).
+      const apiEndpoint = `${base}/predict`;
+      const headers = {
+        "Content-Type": "application/json",
+        ...(settings.apiKey ? { "Authorization": `Bearer ${settings.apiKey}` } : {})
+      };
+      const body = imgUrl.startsWith("data:")
+        ? { image_base64: imgUrl }
+        : { image_url: imgUrl };
+
+      // Health gate: confirm the backend is actually live before scanning
+      // (uses the cached /health result when fresh, else re-probes).
+      ensureBackendConnected((health) => {
+        if (!health.connected) {
+          sendResponse({
+            status: "backend_offline",
+            found: false,
+            connected: false,
+            url: imgUrl,
+            error: `Not connected to the internet — the detection backend at ${base} is unreachable (${health.error || "no response"}). No local scanning is performed.`
+          });
+          return;
+        }
+
+        // POST a payload to the backend image endpoint and normalize the
+        // response into the content-script verdict shape.
+        const postPredict = (payload) =>
+          fetch(apiEndpoint, { method: "POST", headers, body: JSON.stringify(payload) })
+            .then(async (res) => {
+              if (!res.ok) {
+                // Surface the backend's real error message (a 400/404/413 from
+                // the API is an answer, not a reason to scan locally).
+                let msg = "Server returned HTTP " + res.status + ".";
+                try {
+                  const j = await res.json();
+                  if (j && j.error) msg = j.error + (j.hint ? ` (${j.hint})` : "");
+                } catch { /* non-JSON error body */ }
+                throw new Error(msg);
+              }
+              return res.json();
+            })
+            .then((data) => {
+              if (!data || typeof data.score !== "number") {
+                throw new Error("Backend returned an invalid verdict.");
+              }
+              return {
+                status: "success",
+                found: true,
+                score: data.score,
+                tier: data.tier,
+                confidence: data.confidence,
+                reasons: data.reasons || ["Analyzed via the cloud forensic ensemble."],
+                url: imgUrl
+              };
+            });
+
+        // Fetch the image bytes here in the service worker and convert them
+        // to a data URL. Hotlink-protected CDNs (e.g. search-result proxies
+        // like imgs.search.brave.com) reject the backend's server-side
+        // download with 403 while the browser renders the very same image —
+        // so the browser relays the bytes and the backend still performs
+        // 100% of the analysis. No local scanning happens at any point.
+        const fetchImageAsDataUrl = (url) =>
+          fetch(url)
+            .then((res) => {
+              if (!res.ok) return null;
+              return res.blob();
+            })
+            .then(async (blob) => {
+              if (!blob || blob.size > 16 * 1024 * 1024) return null;
+              const bytes = new Uint8Array(await blob.arrayBuffer());
+              let binary = "";
+              const CHUNK = 0x8000;
+              for (let i = 0; i < bytes.length; i += CHUNK) {
+                binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+              }
+              const mime = blob.type && blob.type.startsWith("image/") ? blob.type : "image/png";
+              return `data:${mime};base64,${btoa(binary)}`;
+            })
+            .catch(() => null);
+
+        (async () => {
+          let lastErr = null;
+          try {
+            sendResponse(await postPredict(body));
+            return;
+          } catch (err) {
+            lastErr = err;
+          }
+          // The server downloads image URLs itself; when that fails (hotlink
+          // protection, bot-walls, geo-blocks), relay the bytes from the
+          // browser and resend as image_base64 for a full backend scan.
+          const serverFetchFailed = lastErr &&
+            /failed to load image|failed to download|http 40[134]|forbidden|connection|timed? ?out|timeout/i
+              .test(lastErr.message || "");
+          if (!imgUrl.startsWith("data:") && serverFetchFailed) {
+            const dataUrl = await fetchImageAsDataUrl(imgUrl);
+            if (dataUrl) {
+              try {
+                sendResponse(await postPredict({ image_base64: dataUrl }));
+                return;
+              } catch (err2) {
+                lastErr = err2;
+              }
+            }
+          }
+          sendResponse({
+            status: "error",
+            found: false,
+            connected: true,
+            url: imgUrl,
+            error: lastErr && lastErr.message ? lastErr.message : "Image analysis request failed."
+          });
+        })();
+      });
     });
     return true; // Keep message channel open for async response
   }
@@ -567,299 +685,3 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   
   return true; // Keep channel open
 });
-
-function runLocalHeuristics(imgUrl, sendResponse) {
-  fetch(imgUrl, {
-    headers: { 'Range': 'bytes=0-65535' }
-  })
-  .then(async response => {
-    if (!response.ok) {
-      throw new Error("HTTP error " + response.status);
-    }
-    const buffer = await response.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-    
-    let text = "";
-    for (let i = 0; i < bytes.length; i++) {
-      if (bytes[i] >= 32 && bytes[i] <= 126) {
-        text += String.fromCharCode(bytes[i]);
-      } else {
-        text += " ";
-      }
-    }
-    
-    const aiTags = [
-      { term: "Stable Diffusion", source: "Stable Diffusion metadata signature" },
-      { term: "Midjourney", source: "Midjourney metadata signature" },
-      { term: "DALL-E", source: "DALL-E metadata signature" },
-      { term: "NovelAI", source: "NovelAI metadata signature" },
-      { term: "civitai", source: "CivitAI tag in metadata" },
-      { term: "Adobe Firefly", source: "Adobe Firefly creator tag" }
-    ];
-
-    for (const tag of aiTags) {
-      if (text.includes(tag.term)) {
-        sendResponse({
-          status: "success",
-          found: true,
-          score: 99,
-          reasons: [`Detected '${tag.term}' tag: ${tag.source}`],
-          url: imgUrl
-        });
-        return;
-      }
-    }
-
-    if (text.includes("tEXtparameters") || text.includes("zTXtparameters") || text.includes("iTXtparameters") || text.includes("tEXt parameters") || text.includes("zTXt parameters")) {
-      sendResponse({
-        status: "success",
-        found: true,
-        score: 95,
-        reasons: ["PNG metadata contains generation 'parameters' chunk (Stable Diffusion parameter data)"],
-        url: imgUrl
-      });
-      return;
-    }
-
-    // 3. Pixel-structure forensics (flat cel-shaded render art, e.g. AI meme characters)
-    // Determine whether the Range response already contains the whole image, and
-    // skip pixel analysis for large assets (avoids a second full download).
-    const contentRange = response.headers.get("Content-Range") || "";
-    const crMatch = contentRange.match(/\/(\d+)$/);
-    const totalSize = crMatch ? parseInt(crMatch[1], 10) : buffer.byteLength;
-    if (totalSize <= 512 * 1024) {
-      const pixelResult = await analyzeFlatRenderSignature(imgUrl, buffer, totalSize <= buffer.byteLength);
-      if (pixelResult) {
-        sendResponse({
-          status: "success",
-          found: true,
-          score: pixelResult.score,
-          reasons: pixelResult.reasons,
-          url: imgUrl
-        });
-        return;
-      }
-    }
-    
-    sendResponse({ status: "success", found: false });
-  })
-  .catch(err => {
-    sendResponse({ status: "success", found: false, error: err.message });
-  });
-}
-
-// Perceptual fingerprints of famous AI-generated meme artwork (64-bit dHash hex).
-// Mirrors KNOWN_AI_ARTWORK_FINGERPRINTS in server.py. Match = Hamming distance <= 10.
-const KNOWN_AI_ARTWORK_FINGERPRINTS = [
-  {
-    label: "Tung Tung Tung Sahur cover art (viral AI-generated meme character)",
-    dhash: "64a425353458d269"
-  },
-  {
-    label: "Tung Tung Tung Sahur news/video still (viral AI-generated meme character)",
-    dhash: "4a4b0b2e2d2e3e3e"
-  },
-  {
-    label: "Viral AI-generated receipt artwork (Webflow CDN)",
-    dhash: "232b2b2f230f2b27"
-  }
-];
-
-function hammingDistanceHex(hexA, hexB) {
-  let dist = 0;
-  for (let i = 0; i < 16; i++) {
-    let x = parseInt(hexA[i], 16) ^ parseInt(hexB[i], 16);
-    while (x) {
-      dist += x & 1;
-      x = Math.floor(x / 2);
-    }
-  }
-  return dist;
-}
-
-// Pixel-structure check: cel-shaded AI character art has very few distinct colors
-// paired with high saturation, while camera photos (even heavily compressed ones)
-// rarely exceed 0.5 mean saturation. Runs on ANY image (no CORS canvas taint in the
-// service worker) via createImageBitmap + OffscreenCanvas. Reuses the partial bytes
-// from the metadata fetch when they contain the whole image.
-async function analyzeFlatRenderSignature(imgUrl, partialBytes, partialComplete) {
-  try {
-    let blob;
-    if (partialComplete) {
-      blob = new Blob([partialBytes]);
-    } else {
-      const resp = await fetch(imgUrl);
-      if (!resp.ok) return null;
-      blob = await resp.blob();
-    }
-    if (blob.size > 512 * 1024) return null; // only worth it for small assets
-
-    const bitmap = await createImageBitmap(blob);
-    const w = Math.min(bitmap.width, 256);
-    const h = Math.min(bitmap.height, 256);
-    const canvas = new OffscreenCanvas(w, h);
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    ctx.drawImage(bitmap, 0, 0, w, h);
-    const px = ctx.getImageData(0, 0, w, h).data;
-
-    // 4-bit quantized palette + mean saturation
-    const buckets = new Set();
-    let satSum = 0;
-    const count = px.length / 4;
-    for (let i = 0; i < px.length; i += 4) {
-      const r = px[i], g = px[i + 1], b = px[i + 2];
-      buckets.add(((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4));
-      const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-      satSum += mx > 0 ? (mx - mn) / mx : 0;
-    }
-    const satMean = satSum / count;
-
-    // Perceptual dHash fingerprint for known-AI-artwork matching (9x8 luma)
-    const dCanvas = new OffscreenCanvas(9, 8);
-    const dCtx = dCanvas.getContext("2d");
-    dCtx.drawImage(bitmap, 0, 0, 9, 8);
-    const dPx = dCtx.getImageData(0, 0, 9, 8).data;
-    bitmap.close();
-
-    let hashBits = "";
-    for (let row = 0; row < 8; row++) {
-      for (let col = 0; col < 8; col++) {
-        const li = (row * 9 + col) * 4;
-        const ri = (row * 9 + col + 1) * 4;
-        const lumaL = 0.299 * dPx[li] + 0.587 * dPx[li + 1] + 0.114 * dPx[li + 2];
-        const lumaR = 0.299 * dPx[ri] + 0.587 * dPx[ri + 1] + 0.114 * dPx[ri + 2];
-        hashBits += lumaL > lumaR ? "1" : "0";
-      }
-    }
-    let hexHash = "";
-    for (let i = 0; i < 64; i += 4) {
-      hexHash += parseInt(hashBits.substr(i, 4), 2).toString(16);
-    }
-
-    // Known AI artwork fingerprint match (same DB as the cloud server)
-    for (const entry of KNOWN_AI_ARTWORK_FINGERPRINTS) {
-      if (hammingDistanceHex(hexHash, entry.dhash) <= 10) {
-        return { score: 99, reasons: [`Perceptual fingerprint match: ${entry.label}`] };
-      }
-    }
-
-    // Flat synthetic palette signature. Saturation is scale-invariant and is the
-    // key gate: genuine flat renders sit above 0.5 while dark-table photos of
-    // receipts stay around 0.5-0.6 (calibrated at 256px; mirrored in server.py).
-    // A strict AND over every feature misses news/video stills of AI toon
-    // characters: heavy JPEG recompression inflates edge noise, so the signature
-    // is a SATURATION GATE + scored soft signals instead:
-    //   gate:     mean saturation > 0.50 (camera photos rarely exceed this)
-    //   required: smooth shaded regions (smooth8 0.25-0.70) - large gradient-
-    //             shaded areas typical of 3D renders; real macro florals/fruit
-    //             are textured EVERYWHERE (smooth8 ~0.1) and fail this, while
-    //             blank/bokeh photos (smooth8 > 0.7) fail the upper bound
-    //   signals:  few distinct colors (< 700) - flat render palettes
-    //             sparse edges (edge_density < 0.10) - clean outlines
-    // 2/2 signals -> strong boost; 1/2 -> moderate boost.
-    let signals = 0;
-    const satGate = satMean > 0.50;
-
-    // Smooth-region ratio: fraction of 8x8 patches with std < 8 (variance < 64),
-    // computed over luma below along with the existing flat (std < 3) ratio.
-    const lumaArr = new Float32Array(w * h);
-    for (let i = 0, idx = 0; i < px.length; i += 4, idx++) {
-      lumaArr[idx] = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
-    }
-
-    // Simple gradient magnitude |dx| + |dy|
-    const grad = new Float32Array(w * h);
-    for (let y = 1; y < h; y++) {
-      for (let x = 1; x < w; x++) {
-        const idx = y * w + x;
-        grad[idx] = Math.abs(lumaArr[idx] - lumaArr[idx - w]) + Math.abs(lumaArr[idx] - lumaArr[idx - 1]);
-      }
-    }
-    let strong = 0, medium = 0, edgePix = 0;
-    const total = w * h;
-    for (let i = 0; i < total; i++) {
-      if (grad[i] > 120) strong++;
-      else if (grad[i] > 40) medium++;
-      if (grad[i] > 60) edgePix++;
-    }
-    const edgeDensity = edgePix / total;
-    const edgeRatio = strong / Math.max(medium, 1);
-
-    // Flat-region ratio (8x8 patches with std < 3 => variance < 9) and
-    // smooth-region ratio (std < 8 => variance < 64).
-    let flat = 0, smooth8 = 0, patches = 0;
-    for (let y = 0; y + 8 <= h; y += 8) {
-      for (let x = 0; x + 8 <= w; x += 8) {
-        patches++;
-        let sum = 0, sum2 = 0;
-        for (let yy = y; yy < y + 8; yy++) {
-          for (let xx = x; xx < x + 8; xx++) {
-            const v = lumaArr[yy * w + xx];
-            sum += v; sum2 += v * v;
-          }
-        }
-        const mean = sum / 64;
-        const variance = sum2 / 64 - mean * mean;
-        if (variance < 9) flat++;
-        if (variance < 64) smooth8++;
-      }
-    }
-    const flatRatio = patches > 0 ? flat / patches : 0;
-    const smooth8Ratio = patches > 0 ? smooth8 / patches : 0;
-
-    if (satGate) {
-      if (buckets.size < 700) signals++;
-      if (edgeDensity < 0.10) signals++;
-      const smoothWindow = smooth8Ratio > 0.25 && smooth8Ratio < 0.70;
-      if (smoothWindow && signals >= 1) {
-        if (signals >= 2) {
-          return {
-            score: 80,
-            reasons: [
-              `Synthetic render signature: cel-shaded/3D-render palette (${buckets.size} distinct colors, ${Math.round(satMean * 100)}% saturation, sparse edges at ${Math.round(edgeDensity * 100)}% density, ${Math.round(smooth8Ratio * 100)}% smooth shaded regions) at ${w}x${h}px - AI toon/character art shows this exact color profile; camera photos - even saturated macro shots - keep dense texture edges instead.`
-            ]
-          };
-        }
-        return {
-          score: 60,
-          reasons: [
-            `Synthetic render signature (moderate): saturated image with a limited palette (${buckets.size} colors, ${Math.round(satMean * 100)}% saturation) and partially smooth shading (${Math.round(smooth8Ratio * 100)}% smooth regions, edge density ${Math.round(edgeDensity * 100)}%) at ${w}x${h}px - consistent with AI toon/3D-render character art, uncommon for camera photos.`
-          ]
-        };
-      }
-    }
-
-    // Document-render signature: AI-generated receipts/tickets/documents have a
-    // perfectly smooth background (photos/scans always show texture or shadows)
-    // and soft anti-aliased type (real print has crisp high-contrast edges).
-    // Calibrated against real receipts/photos - identical thresholds to server.py.
-
-    // Border (background) region standard deviation
-    const bw = Math.max(2, Math.floor(w / 20));
-    const bh = Math.max(2, Math.floor(h / 20));
-    let bSum = 0, bSum2 = 0, bCount = 0;
-    for (let x = 0; x < w; x++) {
-      for (let y = 0; y < bh; y++) { const v = lumaArr[y * w + x]; bSum += v; bSum2 += v * v; bCount++; }
-      for (let y = h - bh; y < h; y++) { const v = lumaArr[y * w + x]; bSum += v; bSum2 += v * v; bCount++; }
-    }
-    for (let y = bh; y < h - bh; y++) {
-      for (let x = 0; x < bw; x++) { const v = lumaArr[y * w + x]; bSum += v; bSum2 += v * v; bCount++; }
-      for (let x = w - bw; x < w; x++) { const v = lumaArr[y * w + x]; bSum += v; bSum2 += v * v; bCount++; }
-    }
-    const bMean = bSum / bCount;
-    const borderStd = Math.sqrt(Math.max(0, bSum2 / bCount - bMean * bMean));
-
-    if (edgeDensity > 0.06 && flatRatio < 0.35 && borderStd < 20.0 && edgeRatio < 1.1) {
-      return {
-        score: 75,
-        reasons: [
-          `Synthetic document render signature: text-dense image with unnaturally smooth background (border variance ${borderStd.toFixed(1)}) and soft anti-aliased type (strong/medium edge ratio ${edgeRatio.toFixed(2)}) at ${w}x${h}px - AI generators render receipts/documents with uniform paper and smooth glyphs, unlike real photos/scans.`
-        ]
-      };
-    }
-    return null;
-  } catch (e) {
-    return null; // decode failure or unsupported format - skip silently
-  }
-}
-

@@ -1191,6 +1191,56 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
     return verdict
 
 
+def _decode_proxy_original_url(url):
+    """Decode the original image URL embedded in a search-engine image-proxy URL.
+
+    Search-result proxies (e.g. https://imgs.search.brave.com/<sig>/rs:fit:.../
+    g:ce/aHR0cHM6Ly9...) carry the source URL base64url-encoded in the last path
+    segment. The proxy hosts hotlink-block non-browser clients (403 for any
+    server-side fetch), while the original source usually allows it — so a
+    failed proxy download is retried against the decoded original.
+    Returns the original http(s) URL, or None when the URL is not a recognizable
+    proxy pattern or the payload does not decode.
+    """
+    try:
+        parsed = urlparse(url)
+        host = (parsed.netloc or "").lower()
+        if host != "imgs.search.brave.com":
+            return None
+        segments = [s for s in parsed.path.split("/") if s]
+        if not segments:
+            return None
+        b64 = segments[-1]
+        if len(b64) < 16:
+            return None
+        # base64url with missing padding
+        decoded = base64.urlsafe_b64decode((b64 + "=" * (-len(b64) % 4)).encode("ascii")).decode("utf-8", "strict")
+        if decoded.startswith("http://") or decoded.startswith("https://"):
+            return decoded
+    except Exception:
+        return None
+    return None
+
+
+def _download_image_bytes(url, timeout=15):
+    """Stream an image URL to bytes with a size cap. Raises on failure."""
+    headers = {"User-Agent": "RINSEAuthenticityDetector/2.0"}
+    resp = requests.get(url, headers=headers, timeout=timeout, stream=True)
+    if not resp.ok:
+        resp.close()
+        raise requests.HTTPError(f"HTTP {resp.status_code} for {url}")
+    chunks = []
+    total = 0
+    for chunk in resp.iter_content(chunk_size=64 * 1024):
+        total += len(chunk)
+        if total > MAX_IMAGE_BYTES:
+            resp.close()
+            raise ValueError("Image download too large.")
+        chunks.append(chunk)
+    resp.close()
+    return b"".join(chunks)
+
+
 def _load_image_from_payload(data):
     """
     Safely extract PIL Image, raw bytes, and optional temp file from JSON payload.
@@ -1219,18 +1269,27 @@ def _load_image_from_payload(data):
             parsed = urlparse(image_url)
             if parsed.scheme not in ("http", "https"):
                 return None, None, None, (jsonify({"error": "Invalid image URL: only http(s) sources are allowed."}), 400)
-            headers = {"User-Agent": "RINSEAuthenticityDetector/2.0"}
-            resp = requests.get(image_url, headers=headers, timeout=15, stream=True)
-            resp.raise_for_status()
-            chunks = []
-            total = 0
-            for chunk in resp.iter_content(chunk_size=64 * 1024):
-                total += len(chunk)
-                if total > MAX_IMAGE_BYTES:
-                    resp.close()
-                    return None, None, None, (jsonify({"error": "Image download too large."}), 413)
-                chunks.append(chunk)
-            raw_bytes = b"".join(chunks)
+            # Hotlink-protected proxies (Brave image search etc.) reject any
+            # server-side fetch with 403, while the original source usually
+            # allows it. When the proxy URL embeds the original source URL
+            # (base64url in the path), try the original first, then the proxy
+            # URL as given. A failure of every candidate raises to the outer
+            # handler, which reports the error honestly.
+            candidates = []
+            decoded_original = _decode_proxy_original_url(image_url)
+            if decoded_original:
+                candidates.append(decoded_original)
+            candidates.append(image_url)
+
+            last_err = None
+            for candidate in candidates:
+                try:
+                    raw_bytes = _download_image_bytes(candidate)
+                    break
+                except Exception as e:
+                    last_err = e
+            else:
+                raise last_err if last_err else RuntimeError("Image download failed.")
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as f:
             f.write(raw_bytes)
