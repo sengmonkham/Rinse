@@ -26,6 +26,10 @@ def fuse_ensemble_verdict(
     weights = {
         "synthid": 0.25,
         "c2pa": 0.20,
+        "metadata": 0.20,   # AI-provenance metadata probe (file/container/URL/
+                              # caption markers; see forensics/ai_metadata.py).
+                              # >= 95 hard-overrides below; 70-94 escalates via
+                              # the metadata floor; 35 is a soft anti-AI vote.
         "frequency": 0.12,
         "neural": 0.20,
         "spai": 0.15,   # SPAI spectral analysis (CVPR 2025)
@@ -44,6 +48,11 @@ def fuse_ensemble_verdict(
         weights.pop("temporal", None)
         weights.pop("pwtf", None)
         weights.pop("d3", None)
+    else:
+        # On video the metadata layer carries provenance claims about the
+        # source post (caption/URL), not pixel forensics - keep its weight
+        # meaningful but below the pixel-forensics layers.
+        weights["metadata"] = min(weights.get("metadata", 0.20), 0.18)
 
     # Filter available layers (where score is not None)
     available = {k: v for k, v in layers.items() if v is not None and k in weights}
@@ -58,7 +67,7 @@ def fuse_ensemble_verdict(
     if is_video:
         temporal_layers = {k for k in ("temporal", "pwtf", "d3") if k in available}
         spatial_confident = any(
-            available.get(k, 0) >= 70 for k in ("c2pa", "synthid", "neural", "frequency", "spai")
+            available.get(k, 0) >= 70 for k in ("c2pa", "synthid", "metadata", "neural", "frequency", "spai")
         )
         if temporal_layers and not spatial_confident:
             only_temporal_strong = all(
@@ -113,6 +122,11 @@ def fuse_ensemble_verdict(
     if (synthid_val is not None and synthid_val >= 90) or (c2pa_val is not None and c2pa_val >= 90):
         raw_score = max(raw_score, 92.0)
 
+    # 1b. Explicit in-file AI metadata assertion (trainedAlgorithmicMedia etc.)
+    metadata_val = layers.get("metadata")
+    if metadata_val is not None and metadata_val >= 95:
+        raw_score = max(raw_score, 92.0)
+
     # 2. Confirmed authentic camera C2PA signature
     if c2pa_val is not None and c2pa_val <= 5:
         raw_score = min(raw_score, 12.0)
@@ -129,15 +143,54 @@ def fuse_ensemble_verdict(
     # the temporal layers see only a 24-frame / 128px grayscale thumbnail, so
     # a strong reading there raises the fused score through the weighted
     # average instead of forcing a verdict on its own.
-    ESCALATION_LAYERS = ("c2pa", "synthid", "neural", "frequency", "spai")
+    ESCALATION_LAYERS = ("c2pa", "synthid", "metadata", "neural", "frequency", "spai")
     escalation_pool = {k: v for k, v in available.items() if k in ESCALATION_LAYERS}
     strongest = max(escalation_pool.values()) if escalation_pool else 0
     authenticity_override = c2pa_val is not None and c2pa_val <= 5
+
+    # Metadata-driven escalation: a strong provenance claim (caption/source
+    # naming a generator, >= 70 from the ai_metadata probe) lifts the fused
+    # verdict into the suspicious band when nothing contradicts it. The score
+    # 95 in-file case is handled by the hard override above. Capped at 74:
+    # a provenance claim is strong evidence about the content's origin, but
+    # no pixel-forensics layer corroborates it, so it stays below the
+    # synthetic band.
+    if (
+        metadata_val is not None
+        and 70 <= metadata_val < 95
+        and not authenticity_override
+        and weights_floor is None
+    ):
+        raw_score = max(raw_score, 66.0)
     if not authenticity_override and weights_floor is None:
         if strongest >= 85:
             raw_score = max(raw_score, min(strongest, 82.0))
         elif strongest >= 70:
             raw_score = max(raw_score, 62.0)
+
+    # Image: strong pixel-forensics render signature (server.py
+    # _pixel_forensics_img). The 3/3 saturated and 4/4 muted-band signatures
+    # are STRUCTURAL color-structure evidence, not a statistical classifier:
+    # they fire only when the palette, edge, shading and texture-floor profile
+    # of the whole image matches AI toon/3D-render art, and they are what the
+    # trained CNNSpot classifier is worst at (it reads ~0% on stylized renders
+    # while the signature reads the exact art style). Without this floor the
+    # boost lands in the 'neural' bucket at weight 0.20 and the weighted
+    # average washes it back into UNCERTAIN (measured: muted AI images stuck
+    # at 62 with frequency 80 / pf-boost 70 agreeing). Mirrors the video-side
+    # total_collapse floor below: a decisive structural signature earns the
+    # suspicious band even when the average disagrees. Capped at 70 (not the
+    # synthetic band) because the trained classifiers disagree, and skipped
+    # entirely when a confirmed camera C2PA manifest says otherwise. Image
+    # path only - video escalation stays governed by the temporal guards.
+    pf_strong = bool((extra_data or {}).get("pf_strong"))
+    if (
+        pf_strong
+        and not is_video
+        and not authenticity_override
+        and weights_floor is None
+    ):
+        raw_score = max(raw_score, min(max(strongest, 69), 70.0))
 
     # Video temporal-only escalation cap (see the guard above).
     if weights_floor is not None:
@@ -193,7 +246,7 @@ def fuse_ensemble_verdict(
             #     temporal reading must stay out of the decisive bands)
             spatial_strong = [
                 v for k, v in available.items()
-                if k in ("c2pa", "synthid", "neural", "frequency", "spai") and v >= 70
+                if k in ("c2pa", "synthid", "metadata", "neural", "frequency", "spai") and v >= 70
             ]
             if len(spatial_strong) >= 2:
                 raw_score = max(raw_score, min(max(pwtf_val, 78), 82.0))
@@ -222,7 +275,9 @@ def fuse_ensemble_verdict(
 
     # Determine confidence tier
     active_count = len(available)
-    if (synthid_val is not None and synthid_val >= 90) or (c2pa_val is not None and c2pa_val >= 90):
+    if (synthid_val is not None and synthid_val >= 90) or (c2pa_val is not None and c2pa_val >= 90) or (
+        metadata_val is not None and metadata_val >= 95
+    ):
         confidence = "HIGH"
     elif active_count >= 3:
         confidence = "HIGH"
@@ -288,6 +343,12 @@ def fuse_ensemble_verdict(
         tier = "SYNTHETIC_AI"
     elif final_score >= 69:
         tier = "SUSPICIOUS"
+    elif final_score >= 62 and metadata_val is not None and metadata_val >= 70:
+        # Metadata-escalated verdicts (66-68): a source-label provenance claim
+        # is decisive evidence about the content's origin - not a borderline
+        # pixel reading - so 62-68 with a >= 70 metadata vote reads SUSPICIOUS.
+        # (66 UNCERTAIN on a caption that names the generator tool misled.)
+        tier = "SUSPICIOUS"
     elif final_score >= 55:
         # HIGH-confidence agreement or a confirmed total coherence collapse
         # (structural evidence, see above) both justify SUSPICIOUS in the
@@ -309,7 +370,7 @@ def fuse_ensemble_verdict(
     # Consolidate reasons - watermark/manifest/spatial forensics first; the
     # temporal layers last, since on video they are supplementary evidence.
     all_reasons: List[str] = []
-    for k in ["c2pa", "synthid", "neural", "frequency", "spai", "pwtf", "temporal", "d3"]:
+    for k in ["c2pa", "synthid", "metadata", "neural", "frequency", "spai", "pwtf", "temporal", "d3"]:
         if k in layer_reasons and layer_reasons[k]:
             all_reasons.extend(layer_reasons[k])
 

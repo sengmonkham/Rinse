@@ -1,0 +1,53 @@
+# Render.com Blueprint for the RINSE backend.
+#
+# Deploy: Render dashboard -> New + -> Blueprint -> pick this repo, and Render
+# reads this file. Or from the CLI:  render blueprint launch
+#
+# The service is the full RINSE forensic backend (same Flask API as the HF
+# Space / Oracle VM targets) built from the repo-root Dockerfile.
+
+services:
+  - type: web
+    name: rinse-detector
+    runtime: docker
+    plan: starter            # 1 CPU / 2GB RAM; free plan has 512MB - torch won't fit
+    healthCheckPath: /health
+    autoDeploy: true         # redeploy on every push to master
+
+    # Persistent disk: scan cache (SQLite verdicts) + temp video files.
+    # ~$0.25/GB/mo; delete this block to run without it (scans go uncached).
+    disk:
+      name: rinse-data
+      mountPath: /app/data
+      sizeGB: 1
+
+    envVars:
+      - key: API_KEY
+        generateValue: true   # Bearer token; shown once in the dashboard - copy it
+      # MODEL_NAME defaults to cnnspot (280MB weights). Switch to univfd
+      # (1.7GB weights) by uncommenting - weights are NOT pre-baked for it,
+      # so the first boot downloads them (~5-10 min):
+      # - key: MODEL_NAME
+      #   value: univfd
+      - key: STORYSCOPE_MODE
+        value: heuristic      # offline rule-based engine; see README
+      # Set this if you want LLM-based StoryScope extraction:
+      # - key: STORYSCOPE_LLM_API_KEY
+      #   sync: false
+      - key: SCAN_CACHE
+        value: "1"
+      # Docker CMD uses the default port from EXPOSE; PORT is injected by
+      # Render at runtime and server.py already binds 0.0.0.0:$PORT.
+      - key: PORT
+        value: 10000
+
+    # Full forensic stack is heavy: give the build the time it needs.
+    buildFilter:
+      paths:
+        - "**/*.py"
+        - Dockerfile
+        - requirements-render.txt
+        - render.yaml
+
+    # (No custom dockerCommand needed - the image CMD runs server.py, which
+    # reads PORT.)

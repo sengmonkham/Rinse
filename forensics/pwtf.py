@@ -364,7 +364,18 @@ def _score_from_stats(
 
     # Structured residuals are evidence FOR real footage: strong positive
     # autocorrelation means the residual content persists across frames.
-    if ac1 is not None and ac1 > 0.70:
+    #
+    # CONTRADICTION GUARD (measured 2026-09-27, ig-ai-reel-01): the penalty
+    # must NOT apply when the coherence floor is collapsed. A collapsed floor
+    # (p05 -> 0) is the localized-REGENERATION signature - some pixels share
+    # no temporal model with the scene - and generated detail can absolutely
+    # persist frame-to-frame (stylized/animated generation, temporally stable
+    # diffusion decoders). Penalizing persistence there suppresses the very
+    # evidence that found the regeneration: measured p05 0.00 + ac1 0.855
+    # scored 54 instead of 62, dropping the reel below the voter's >= 60
+    # escalation gate and flipping the fused verdict to AUTHENTIC_HUMAN.
+    # Both signals cannot simultaneously mean "real".
+    if ac1 is not None and ac1 > 0.70 and p05 >= 0.20:
         score -= 8
         reasons.append(
             f"Residual texture persists across frames (lag-1 autocorrelation "
@@ -475,6 +486,10 @@ def analyze_pixel_temporal_frequency(
         metrics = {k: round(v, 4) for k, v in stats.items()}
         if motion:
             metrics.update(motion)
+        # Lag-1 residual autocorrelation is a scored signal (whiteness rule)
+        # but was not surfaced; expose it so audits/regressions can review the
+        # exact evidence the score was built from.
+        metrics["residual_ac1"] = round(residual_ac1, 4)
 
         return {
             "score": score,

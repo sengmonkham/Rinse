@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "source_attribution": "Character labels are descriptive; canonical images are collected from public web sources for research/fair use.",
+  "characters": [
+    {
+      "id": "tung-tung-sahur",
+      "label": "Tung Tung Tung Sahur (viral AI-generated brainrot character)",
+      "family": "italian-brainrot",
+      "ai_generated": true,
+      "status": "legacy",
+      "notes": "Already covered by two legacy seeds in server.py; recanonize later."
+    },
+    {
+      "id": "ballerina-cappuccina",
+      "label": "Ballerina Cappuccina (viral AI-generated brainrot character)",
+      "family": "italian-brainrot",
+      "ai_generated": true,
+      "status": "pending",
+      "notes": "Needs canonical views: cover art, 3-5 meme stills, TikTok frame."
+    },
+    {
+      "id": "tralalero-tralala",
+      "label": "Tralalero Tralala (viral AI-generated brainrot character)",
+      "family": "italian-brainrot",
+      "ai_generated": true,
+      "status": "pending",
+      "notes": "Needs canonical views."
+    },
+    {
+      "id": "bombardiro-crocodilo",
+      "label": "Bombardiro Crocodilo (viral AI-generated brainrot character)",
+      "family": "italian-brainrot",
+      "ai_generated": true,
+      "status": "pending",
+      "notes": "Needs canonical views."
+    },
+    {
+      "id": "brr-brr-patapim",
+      "label": "Brr Brr Patapim (viral AI-generated brainrot character)",
+      "family": "italian-brainrot",
+      "ai_generated": true,
+      "status": "pending",
+      "notes": "Needs canonical views."
+    },
+    {
+      "id": "lirili-larila",
+      "label": "Lirili Larila (viral AI-generated brainrot character)",
+      "family": "italian-brainrot",
+      "ai_generated": true,
+      "status": "pending",
+      "notes": "Needs canonical views."
+    },
+    {
+      "id": "chimpanzini-bananini",
+      "label": "Chimpanzini Bananini (viral AI-generated brainrot character)",
+      "family": "italian-brainrot",
+      "ai_generated": true,
+      "status": "pending",
+      "notes": "Needs canonical views."
+    },
+    {
+      "id": "cappuccino-assassino",
+      "label": "Cappuccino Assassino (viral AI-generated brainrot character)",
+      "family": "italian-brainrot",
+      "ai_generated": true,
+      "status": "pending",
+      "notes": "Needs canonical views."
+    },
+    {
+      "id": "trippi-troppi",
+      "label": "Trippi Troppi (viral AI-generated brainrot character)",
+      "family": "italian-brainrot",
+      "ai_generated": true,
+      "status": "pending",
+      "notes": "Needs canonical views."
+    },
+    {
+      "id": "frigo-camelo",
+      "label": "Frigo Camelo (viral AI-generated brainrot character)",
+      "family": "italian-brainrot",
+      "ai_generated": true,
+      "status": "pending",
+      "notes": "Needs canonical views."
+    },
+    {
+      "id": "bombombini-gusini",
+      "label": "Bombombini Gusini (viral AI-generated brainrot character)",
+      "family": "italian-brainrot",
+      "ai_generated": true,
+      "status": "pending",
+      "notes": "Needs canonical views."
+    },
+    {
+      "id": "girafa-celestre",
+      "label": "Girafa Celestre (viral AI-generated brainrot character)",
+      "family": "italian-brainrot",
+      "ai_generated": true,
+      "status": "pending",
+      "notes": "Needs canonical views."
+    }
+  ]
+}

@@ -1,6 +1,22 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Shield, ExternalLink, Scan, RefreshCw, Server } from 'lucide-react';
 
+// RINSE never scans its own website — the landing page legitimately contains
+// self-referential demo copy ("AI 87%" badges, how-it-works bullets) that the
+// heuristics are built to flag, so scanning it would only produce false
+// positives. Mirrors the skip list in public/content.js.
+const SKIPPED_HOSTS = ['getrinse.tech', 'www.getrinse.tech'];
+
+const isSkippedTabUrl = (url: string): boolean => {
+  if (!url) return false;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return SKIPPED_HOSTS.includes(host) || host.endsWith('.getrinse.tech');
+  } catch {
+    return false;
+  }
+};
+
 interface PopupSettings {
   enableTextScan: boolean;
   enableImageScan: boolean;
@@ -104,6 +120,7 @@ export default function Popup() {
     }
   });
   const [checkingBackend, setCheckingBackend] = useState(false);
+  const [isSkippedSite, setIsSkippedSite] = useState(false);
 
   // Load state on mount
   useEffect(() => {
@@ -140,6 +157,13 @@ export default function Popup() {
       const tab = tabs[0];
       if (tab && tab.url) {
         setCurrentTab({ title: tab.title || '', url: tab.url });
+
+        // RINSE's own site is excluded from scanning (self-referential demo
+        // content reads as AI by design).
+        if (isSkippedTabUrl(tab.url)) {
+          setIsSkippedSite(true);
+          return;
+        }
 
         // Get scan results count
         chrome.tabs.sendMessage(tab.id, { action: 'getPageStatus' }, (response: any) => {
@@ -217,6 +241,7 @@ export default function Popup() {
   // Run scan
   const handleScan = useCallback(() => {
     if (scanning || !IS_CHROME_EXT) return;
+    if (isSkippedSite) return; // RINSE does not scan its own website
     setScanning(true);
 
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs: any[]) => {
@@ -238,7 +263,7 @@ export default function Popup() {
         });
       }
     });
-  }, [scanning, settings.enableTextScan, settings.enableImageScan, settings.enableVideoScan]);
+  }, [scanning, isSkippedSite, settings.enableTextScan, settings.enableImageScan, settings.enableVideoScan]);
 
   // Re-ping the backend health endpoint
   const handleCheckBackend = useCallback(() => {
@@ -263,6 +288,9 @@ export default function Popup() {
 
   const isInternal = currentTab.url?.startsWith('chrome://') || currentTab.url?.startsWith('chrome-extension://');
   const isDisabled = !extensionEnabled;
+  // Skipped site: same UX treatment as chrome:// pages — scanning actions are
+  // disabled and the button explains why.
+  const isExcluded = isInternal || isSkippedSite;
 
   return (
     <div className="popup-root">
@@ -504,12 +532,17 @@ export default function Popup() {
       <button
         className="popup-scan-btn"
         onClick={handleScan}
-        disabled={isDisabled || scanning || isInternal}
+        disabled={isDisabled || scanning || isExcluded}
       >
         {scanning ? (
           <>
             <RefreshCw size={13} className="popup-spinner-icon" />
             Scanning...
+          </>
+        ) : isSkippedSite ? (
+          <>
+            <Shield size={13} />
+            Not scanned — RINSE's own site
           </>
         ) : scanCount > 0 ? (
           <>
@@ -531,9 +564,19 @@ export default function Popup() {
       </button>
 
       {/* Current page info */}
-      {currentTab.title && !isInternal && (
+      {currentTab.title && !isExcluded && (
         <div className="popup-page-info">
           <span className="popup-page-title">{currentTab.title}</span>
+        </div>
+      )}
+
+      {/* Skipped-site notice */}
+      {isSkippedSite && (
+        <div className="popup-page-info">
+          <span className="popup-page-title">
+            This is RINSE's website — scanning is skipped here by design, so the
+            site's own AI-content demos can't produce false flags.
+          </span>
         </div>
       )}
     </div>

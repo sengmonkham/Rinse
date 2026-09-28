@@ -1,0 +1,47 @@
+# Keep the Render build context small (the whole directory is sent to the
+# Docker daemon before COPY runs).
+
+# Frontend / extension build - not part of the backend image
+node_modules
+dist
+dist-ssr
+src
+public
+index.html
+package.json
+package-lock.json
+tsconfig*.json
+vite.config.ts
+eslint.config.js
+
+# Local Python environment and caches
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+
+# Model weights (downloaded inside the image at build time) and runtime caches
+.detectzoo_data
+cache
+*.sqlite3
+
+# Git and local docs / samples - not needed in the image
+.git
+.gitignore
+docs
+demo-samples
+canvas-demo
+tests
+scripts
+CRASH_COURSE.md
+REBUILD_GUIDE.md
+PLAN.md
+*.txt
+# ...but the Docker build needs this one:
+!requirements-render.txt
+
+# Other deploy targets and their docs - not needed in the image
+deploy
+

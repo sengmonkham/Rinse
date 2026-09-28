@@ -1,0 +1,16 @@
+# /etc/caddy/Caddyfile  — replace <DOMAIN> with e.g. rinse-xxxx.duckdns.org
+<DOMAIN> {
+	reverse_proxy 127.0.0.1:5001
+
+	# video_base64 payloads: 150MB clip -> ~200MB base64
+	request_body {
+		max_size 512MB
+	}
+
+	# Scan endpoints are slow (CPU inference); don't time them out early.
+	reverse_proxy /predict/* 127.0.0.1:5001 {
+		transport http {
+			response_header_timeout 300s
+		}
+	}
+}

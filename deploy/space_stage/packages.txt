@@ -1,0 +1,2 @@
+# System packages for the RINSE Space (Debian-slim base via the Gradio SDK).
+ffmpeg

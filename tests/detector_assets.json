@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "_readme": [
+    "Known-ground-truth assets for regression-testing the RINSE AI detectors.",
+    "Run via: .venv/bin/python scripts/regression_check.py [--live]",
+    "Labels: 'ai' = AI-generated, 'human' = confirmed human-made.",
+    "Instagram posts go through yt-dlp on the server (social platform pages).",
+    "Brave image-search proxy URLs are decoded to the original source by the",
+    "server automatically (see _decode_proxy_original_url in server.py).",
+    "'kind' field: image (deep path) or video (shot-aware video deep path).",
+    "'tier_expect' is the acceptable verdict tier set for a PASS."
+  ],
+  "assets": [
+    {
+      "id": "ig-ai-reel-01",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "url": "https://www.instagram.com/p/DdmbzhFPOsZ/",
+      "tier_expect": ["SYNTHETIC_AI", "SUSPICIOUS"]
+    },
+    {
+      "id": "ig-ai-reel-02",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "url": "https://www.instagram.com/p/DcCecK7gS-T/",
+      "tier_expect": ["SYNTHETIC_AI", "SUSPICIOUS"]
+    },
+    {
+      "id": "ig-ai-reel-03",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "url": "https://www.instagram.com/p/DduaXstRCdl",
+      "tier_expect": ["SYNTHETIC_AI", "SUSPICIOUS"]
+    },
+    {
+      "id": "ig-ai-reel-04",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "url": "https://www.instagram.com/downey.ai/reel/DdfROhPxo5G/",
+      "tier_expect": ["SYNTHETIC_AI", "SUSPICIOUS"]
+    },
+    {
+      "id": "ig-human-post-01",
+      "label": "human",
+      "kind": "video",
+      "source": "instagram",
+      "url": "https://www.instagram.com/p/DdgYCT5B6mn/",
+      "tier_expect": ["AUTHENTIC_HUMAN", "INCONCLUSIVE"]
+    },
+    {
+      "id": "web-ai-fortnite-brainrot",
+      "label": "ai",
+      "kind": "image",
+      "source": "brave-proxy (pcgamesn.com)",
+      "url": "https://imgs.search.brave.com/YIZLGnF-0gz7cMH2exmxtzgQZ4uEBoFwStXosMAjKpE/rs:fit:860:0:0:0/g:ce/aHR0cHM6Ly93d3cu/cGNnYW1lc24uY29t/L3dwLWNvbnRlbnQv/c2l0ZXMvcGNnYW1l/c24vMjAyNi8wNC9m/b3J0bml0ZS1icmFp/bnJvdC1idW5kbGUt/aXRlbS1zaG9wLW91/dC1ub3ctYWktbWVt/ZS1jaGFyYWN0ZXJz/LWJhbGxlcmluYS1j/YXBwdWNjaW5hLXR1/bmctdHVuZy10dW5n/LXNhaHVyLTc3Nng0/MzYuanBn",
+      "tier_expect": ["SYNTHETIC_AI", "SUSPICIOUS"]
+    },
+    {
+      "id": "web-ai-guardian-still",
+      "label": "ai",
+      "kind": "image",
+      "source": "brave-proxy (theguardian.com)",
+      "url": "https://imgs.search.brave.com/Hrd39G_YJAIHnoRE2LgyRg-eVU4DOmM5rga9XVsAsR4/rs:fit:860:0:0:0/g:ce/aHR0cHM6Ly9pLmd1/aW0uY28udWsvaW1n/L21lZGlhLzAzYmJh/MDIxMmVlNDE5YTQy/NGEzMzY3YzI4NzY3/NzdiOTBlNWJkNzIv/MF8xMV8xNzk2XzE0/MzYvbWFzdGVyLzE3/OTYuanBnP3dpZHRo/PTQ2NSZkcHI9MSZz/PW5vbmUmY3JvcD1u/b25l",
+      "tier_expect": ["SYNTHETIC_AI", "SUSPICIOUS"]
+    },
+    {
+      "id": "web-ai-italian-brainrot-poster",
+      "label": "ai",
+      "kind": "image",
+      "source": "brave-proxy (brainrotcharacters.net, .webp)",
+      "url": "https://imgs.search.brave.com/_DO9REk6x1lF1iwU6qKjSE_qJyDraOBWoCVlxoJ1GEI/rs:fit:860:0:0:0/g:ce/aHR0cHM6Ly9icmFp/bnJvdGNoYXJhY3Rl/cnMubmV0L3dwLWNv/bnRlbnQvdXBsb2Fk/cy9BbGwtSXRhbGlh/bi1CcmFpbnJvdC1D/aGFyYWN0ZXJzLVJv/c3Rlci03Njh4Mzg0/LndlYnA",
+      "tier_expect": ["SYNTHETIC_AI", "SUSPICIOUS"]
+    }
+  ]
+}

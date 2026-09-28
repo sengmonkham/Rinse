@@ -1,0 +1,23 @@
+{
+  "comment": "Legacy KNOWN_AI_ARTWORK_FINGERPRINTS entries from server.py, preserved verbatim so existing detection behavior does not regress. dhash values were computed with the legacy _dhash (byte-compatible with forensics/hashing.py dhash).",
+  "seeds": [
+    {
+      "character": "tung-tung-sahur",
+      "label": "Tung Tung Tung Sahur cover art (viral AI-generated meme character)",
+      "file": null,
+      "dhash": "0x64a425353458d269"
+    },
+    {
+      "character": "tung-tung-sahur",
+      "label": "Tung Tung Tung Sahur news/video still (viral AI-generated meme character)",
+      "file": null,
+      "dhash": "0x4a4b0b2e2d2e3e3e"
+    },
+    {
+      "character": "ai-generated-receipt",
+      "label": "Viral AI-generated receipt artwork (Webflow CDN)",
+      "file": null,
+      "dhash": "0x232b2b2f230f2b27"
+    }
+  ]
+}

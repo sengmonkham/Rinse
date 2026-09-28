@@ -1,0 +1,21 @@
+# /etc/systemd/system/rinse.service
+# Runs the RINSE Flask backend under the provisioned venv.
+# PORT and API_KEY come from /opt/rinse/env.
+[Unit]
+Description=RINSE Cloud Detector (Flask)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/opt/rinse/app
+EnvironmentFile=/opt/rinse/env
+ExecStart=/opt/rinse/venv/bin/python server.py
+Restart=always
+RestartSec=5
+
+# NoNewPrivileges/Protect* deliberately omitted: detectzoo downloads model
+# weights into the home dir on first boot and needs no extra hardening quirks.
+
+[Install]
+WantedBy=multi-user.target

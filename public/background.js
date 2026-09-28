@@ -436,6 +436,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const body = imgUrl.startsWith("data:")
         ? { image_base64: imgUrl }
         : { image_url: imgUrl };
+      // Page-declared provenance context (alt text, caption, page title/URL,
+      // surrounding post text) rides along; the backend's AI-metadata layer
+      // scans it as provenance evidence. Sanitized to plain strings.
+      const ctx = request.context && typeof request.context === "object" ? request.context : {};
+      const pickStr = (v, max) => (typeof v === "string" ? v.slice(0, max) : "");
+      if (pickStr(ctx.alt_text, 400)) body.alt_text = pickStr(ctx.alt_text, 400);
+      if (pickStr(ctx.page_title, 200)) body.page_title = pickStr(ctx.page_title, 200);
+      if (pickStr(ctx.page_url, 500)) body.page_url = pickStr(ctx.page_url, 500);
+      if (pickStr(ctx.page_context, 1500)) body.page_context = pickStr(ctx.page_context, 1500);
 
       // Health gate: confirm the backend is actually live before scanning
       // (uses the cached /health result when fresh, else re-probes).
@@ -516,9 +525,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           } catch (err) {
             lastErr = err;
           }
-          // The server downloads image URLs itself; when that fails (hotlink
-          // protection, bot-walls, geo-blocks), relay the bytes from the
-          // browser and resend as image_base64 for a full backend scan.
+          // NOTE: the byte-relay fallback below must keep the context fields -
+          // it rebuilds the payload as { image_base64: dataUrl, ...body } so
+          // alt/caption context survives the relay.
           const serverFetchFailed = lastErr &&
             /failed to load image|failed to download|http 40[134]|forbidden|connection|timed? ?out|timeout/i
               .test(lastErr.message || "");
@@ -526,7 +535,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             const dataUrl = await fetchImageAsDataUrl(imgUrl);
             if (dataUrl) {
               try {
-                sendResponse(await postPredict({ image_base64: dataUrl }));
+                sendResponse(await postPredict({ image_base64: dataUrl, ...body }));
                 return;
               } catch (err2) {
                 lastErr = err2;

@@ -43,6 +43,61 @@ let hoveredElement = null;
 let mouseX = 0;
 let mouseY = 0;
 
+// ── Skipped-host rule ──────────────────────────────────────────────────
+// RINSE must never scan the RINSE website itself (getrinse.tech). The site
+// legitimately contains self-referential "AI 87%"-style demo copy, pricing
+// language and how-it-works bullets that every heuristic here is built to
+// flag, so running the scanner on it produces guaranteed false positives.
+const SKIPPED_HOSTS = [
+  "getrinse.tech",
+  "www.getrinse.tech"
+];
+
+const isSkippedHost = () => {
+  try {
+    const host = new URL(window.location.href).hostname.toLowerCase();
+    // Exact match on the marketing domains...
+    if (SKIPPED_HOSTS.includes(host)) return true;
+    // ...and any subdomain of the production domain (app.getrinse.tech, etc.)
+    if (host.endsWith(".getrinse.tech")) return true;
+
+    // Local/dev deployments of the marketing site (localhost:3000 etc.):
+    // only skip when the page actually looks like the RINSE site, so ordinary
+    // localhost development is still scanned normally.
+    if (host === "localhost" || host === "127.0.0.1") {
+      const title = (document.title || "").toLowerCase();
+      const h1 = document.querySelector("h1");
+      const h1Text = h1 ? h1.textContent.toLowerCase() : "";
+      return title.includes("rinse") || h1Text.includes("rinse");
+    }
+
+    return false;
+  } catch (e) {
+    return false;
+  }
+};
+
+// Standard "we deliberately did not scan this page" result. Shaped exactly
+// like a real result (per-type arrays + integrity score) so the popup, badge
+// and history code can consume it without special cases. `skipped: true`
+// marks it as a deliberate skip; `scannedAt: null` keeps it out of the
+// "had results" code paths.
+const skippedPageResult = () => ({
+  text: [],
+  images: [],
+  videos: [],
+  score: 100,
+  scannedAt: null,
+  skipped: true,
+  skipReason: "RINSE does not scan its own website (getrinse.tech).",
+  vibecoded: {
+    isVibecoded: false,
+    reasons: [],
+    hasPurpleGradient: false,
+    hasBubbleHeader: false
+  }
+});
+
 // Dynamic style sheet injection
 const injectStyles = () => {
   if (document.getElementById("aegis-styles")) return;
@@ -368,20 +423,20 @@ const injectStyles = () => {
       font-weight: 700;
     }
 
-    /* Floating Cursor Tooltip Bubble */
+    /* Floating Cursor Tooltip Bubble — SOLID background so the verdict is
+       always legible, even over dark backgrounds, images or busy gradients
+       (backdrop-filter blur alone disappears on dark pages). */
     .aegis-floating-tooltip {
       position: absolute;
       width: 280px;
-      background: transparent !important;
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: #1E293B !important;
+      border: 1px solid rgba(148, 163, 184, 0.35);
       border-radius: 12px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5) !important;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6) !important;
       color: #E2E8F0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       padding: 12px;
-      z-index: 99999999;
+      z-index: 2147483647;
       pointer-events: auto;
       opacity: 0;
       transform: scale(0.95) translateY(5px);
@@ -1416,7 +1471,39 @@ const analyzeTextHeuristics = (text) => {
 // this function never scores an image locally. When the backend is not
 // reachable the promise resolves with a connected:false result carrying the
 // "not connected" explanation instead of a fabricated score.
-const inspectImageMetadata = async (imgUrl) => {
+// Collect page-declared provenance context for ONE image and send it with
+// the backend scan: alt/title text, figcaption, the document title, the page
+// URL and the surrounding post/article text. This is what the server's
+// AI-provenance metadata layer scans (generator names in a caption or alt
+// label are strong provenance evidence; surrounding text is context only).
+const collectImagePageContext = (img) => {
+  if (!img) return {};
+  const ctx = {};
+  const altParts = [];
+  if (img.alt && img.alt.trim()) altParts.push(img.alt.trim());
+  if (img.title && img.title.trim()) altParts.push(img.title.trim());
+  const figure = img.closest('figure');
+  if (figure) {
+    const cap = figure.querySelector('figcaption');
+    if (cap) {
+      const capText = (cap.innerText || cap.textContent || '').trim();
+      if (capText) altParts.push(capText);
+    }
+  }
+  if (altParts.length) ctx.alt_text = altParts.join(' | ').slice(0, 400);
+  if (document.title && document.title.trim()) ctx.page_title = document.title.trim().slice(0, 200);
+  try { ctx.page_url = window.location.href.slice(0, 500); } catch (e) { /* sandboxed */ }
+  // Surrounding post/article text (context only on the server): the nearest
+  // article/post container if any, else the figure's parent section text.
+  const container = img.closest('article, [class*="post"], [data-testid="post-container"], [class*="feed-shared-update"], section') || figure;
+  if (container) {
+    const text = (container.innerText || container.textContent || '').replace(/\s+/g, ' ').trim();
+    if (text.length > 3) ctx.page_context = text.slice(0, 1500);
+  }
+  return ctx;
+};
+
+const inspectImageMetadata = async (imgUrl, pageContext) => {
   if (!imgUrl) return null;
 
   // Resolve relative URLs to absolute. The backend only accepts http(s) URLs;
@@ -1432,7 +1519,7 @@ const inspectImageMetadata = async (imgUrl) => {
 
   return new Promise((resolve) => {
     try {
-      chrome.runtime.sendMessage({ action: "fetchImageMetadata", url: absoluteUrl }, (response) => {
+      chrome.runtime.sendMessage({ action: "fetchImageMetadata", url: absoluteUrl, context: pageContext || {} }, (response) => {
         if (chrome.runtime.lastError) {
           resolve({
             score: null,
@@ -1609,6 +1696,19 @@ const inspectImageDOMContext = (img) => {
 // Trigger local scan on context menu or hotkey
 const triggerLocalScan = async (element) => {
   if (!element) return;
+
+  // RINSE never scans its own website (demo copy reads as AI by design).
+  if (isSkippedHost()) {
+    injectStyles();
+    showDiagnosticFloatingTooltip({
+      score: null,
+      reasons: [skippedPageResult().skipReason],
+      title: "SCAN SKIPPED",
+      details: `Domain: ${window.location.hostname}`
+    }, mouseX, mouseY);
+    return;
+  }
+
   injectStyles();
 
   // Flash highlighting border
@@ -1653,7 +1753,7 @@ const triggerLocalScan = async (element) => {
   // but never replace it. Offline images are reported as "not connected".
   if (element.tagName === "IMG") {
     showFloatingScannerTooltip("Analyzing image via backend...", mouseX, mouseY);
-    let imgResult = await inspectImageMetadata(element.src);
+    let imgResult = await inspectImageMetadata(element.src, collectImagePageContext(element));
     if (imgResult && imgResult.score === null) {
       // Backend unreachable or request failed — say so, no fabricated score.
       showDiagnosticFloatingTooltip({
@@ -2049,6 +2149,19 @@ async function extractVideoElementFrames(videoEl, maxFrames = 32) {
 }
 
 const performPageScan = async (options = { text: true, images: true, videos: true }) => {
+  // RINSE's own website is full of self-referential demo copy ("AI 87%" badges,
+  // how-it-works bullets) that every heuristic here is built to flag — never
+  // scan it, and report the skip instead of a fabricated clean page.
+  if (isSkippedHost()) {
+    scanResults = skippedPageResult();
+    try {
+      chrome.runtime.sendMessage({ action: "updateBadge", count: 0 });
+    } catch (e) {
+      // Extension context gone — nothing to update
+    }
+    return scanResults;
+  }
+
   injectStyles();
   const purpleGradientResult = detectPurpleGradient();
   const bubbleHeaderResult = detectBubbleHeader();
@@ -2187,7 +2300,7 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
       // — they never replace a scan. A result with score: null means the
       // backend was unreachable or the image unscannable: recorded honestly,
       // no badge, no fabricated score.
-      let imgResult = await inspectImageMetadata(img.src);
+      let imgResult = await inspectImageMetadata(img.src, collectImagePageContext(img));
       if (imgResult && imgResult.score === null) {
         // Backend offline or request failed — record as unscanned.
         scanResults.images.push({
@@ -2729,6 +2842,27 @@ const showFloatingScannerTooltip = (textStr, x, y) => {
   setTimeout(() => floatingTooltipElement.classList.add("show"), 50);
 };
 
+  // Position the tooltip at the cursor while keeping it fully inside the
+  // viewport — at screen edges it would otherwise render half off-screen
+  // (a common reason it "does not appear" when pressing Option).
+  const positionTooltipInViewport = (el, x, y) => {
+    const margin = 12;
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
+    const scrollY = window.pageYOffset || document.documentElement.scrollTop;
+    let left = x + 14;
+    let top = y + 14;
+    if (left + w + margin > scrollX + window.innerWidth) {
+      left = Math.max(margin, x - w - 14);
+    }
+    if (top + h + margin > scrollY + window.innerHeight) {
+      top = Math.max(margin, y - h - 14);
+    }
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  };
+
 // Create diagnostic floating tooltip (builds DOM safely; page-derived strings are never parsed as HTML)
 const showDiagnosticFloatingTooltip = (data, x, y) => {
   injectStyles();
@@ -2739,7 +2873,7 @@ const showDiagnosticFloatingTooltip = (data, x, y) => {
   floatingTooltipElement.style.left = `${x + 10}px`;
   floatingTooltipElement.style.top = `${y + 10}px`;
 
-  const color = data.score >= 50 ? "#F87171" : "#34D399";
+  const color = typeof data.score === "number" ? (data.score >= 50 ? "#F87171" : "#34D399") : "#64748B";
 
   // Header
   const header = document.createElement("div");
@@ -2749,7 +2883,9 @@ const showDiagnosticFloatingTooltip = (data, x, y) => {
   title.textContent = data.title || "";
   const score = document.createElement("span");
   score.style.cssText = `font-size:12px; font-weight:800; color:${color};`;
-  score.textContent = `AI: ${data.score}%`;
+  // A null score means "deliberately not scanned" — say so instead of showing
+  // a fabricated percentage.
+  score.textContent = typeof data.score === "number" ? `AI: ${data.score}%` : "not scanned";
   header.appendChild(title);
   header.appendChild(score);
 
@@ -2790,6 +2926,8 @@ const showDiagnosticFloatingTooltip = (data, x, y) => {
   floatingTooltipElement.appendChild(footer);
 
   document.body.appendChild(floatingTooltipElement);
+  // Measure after insertion, then clamp inside the viewport before showing.
+  positionTooltipInViewport(floatingTooltipElement, x, y);
   setTimeout(() => floatingTooltipElement.classList.add("show"), 50);
 
   closeBtn.addEventListener("click", removeFloatingTooltip);
@@ -2816,9 +2954,25 @@ document.addEventListener("mousemove", (e) => {
 });
 
 document.addEventListener("mouseover", (e) => {
-  // Track hovered element (prefer text containers or images)
+  // Track hovered element. Accept ANY meaningful element (not just P/SPAN/IMG
+  // …): on modern sites text sits in DIVs, so Option/hotkey scans silently
+  // did nothing on most pages. Leaf-ish, visible, non-extension elements only,
+  // preferring the deepest one so the tooltip targets what is under the cursor.
   const el = e.target;
-  if (el && (el.tagName === "P" || el.tagName === "LI" || el.tagName === "SPAN" || el.tagName === "IMG" || el.tagName === "H1" || el.tagName === "H2" || el.tagName === "H3" || el.tagName === "ARTICLE")) {
+  if (!el || el.nodeType !== 1) return;
+  if (el.closest(".aegis-drawer, .aegis-floating-tooltip, .aegis-badge, .aegis-laser-scanner, #aegis-styles")) return;
+  if (!el.offsetParent && getComputedStyle(el).position !== "fixed") return;
+  const tag = el.tagName;
+  if (tag === "HTML" || tag === "BODY" || tag === "SCRIPT" || tag === "STYLE" || tag === "LINK" || tag === "META" || tag === "NOSCRIPT") return;
+  hoveredElement = el;
+});
+
+// A simple, robust hover fallback: track the element under the cursor on every
+// move. mouseover events can be missed when the mouse never moves between
+// hover and keypress (a common reason the Option popup "does not appear").
+document.addEventListener("mousemove", (e) => {
+  const el = e.target;
+  if (el && el.nodeType === 1 && !el.closest(".aegis-drawer, .aegis-floating-tooltip, .aegis-badge, .aegis-laser-scanner, #aegis-styles")) {
     hoveredElement = el;
   }
 });
@@ -2908,6 +3062,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ status: "disabled" });
       return true;
     }
+    // Never scan selections on RINSE's own site (demo copy is AI-shaped by design)
+    if (isSkippedHost()) {
+      sendResponse({ status: "skipped" });
+      return true;
+    }
     // Context Menu Trigger: analyze selected text segment
     const textSegment = request.text || "";
     if (textSegment.trim().length > 0) {
@@ -2926,6 +3085,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   else if (request.action === "scanSelectedImage") {
     if (!extensionEnabled) {
       sendResponse({ status: "disabled" });
+      return true;
+    }
+    // Never scan images on RINSE's own site (demo badges are AI-shaped by design)
+    if (isSkippedHost()) {
+      sendResponse({ status: "skipped" });
       return true;
     }
     // Context Menu Trigger: analyze image source url (backend scan only)
