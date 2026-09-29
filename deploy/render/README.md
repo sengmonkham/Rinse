@@ -7,7 +7,7 @@ targets — clients work unchanged.
 
 ## What you get
 
-- **Docker runtime** on `python:3.11-slim` + ffmpeg; CPU-only torch (no CUDA).
+- **Docker runtime** on `python:3.12-slim` + ffmpeg; CPU-only torch (no CUDA).
 - CNNSpot weights (~280MB) **baked into the image** at build time — no
   Dropbox download on cold boot (unlike the HF Space, where first boot pays it).
 - **Persistent disk** at `/app/data` for the SQLite scan cache (survives

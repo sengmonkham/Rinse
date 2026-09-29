@@ -11,7 +11,7 @@
 
 # (bookworm pinned: slim currently tracks trixie, where libglib2.0-0 was
 # renamed to libglib2.0-0t64 - the apt install below expects bookworm names)
-FROM python:3.11-slim-bookworm
+FROM python:3.12-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
