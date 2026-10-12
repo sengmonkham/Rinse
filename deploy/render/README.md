@@ -88,4 +88,29 @@ Model weights are baked in, so deploys are much faster than the first build.
 - `render.yaml` — blueprint (service, disk, env vars, health check)
 - `.dockerignore` — keeps the build context small
 
-Nothing in `server.py` or the forensic layers needed changing.
+### rPPG heartbeat layer (video path)
+
+`forensics/rppg.py` is a face-gated remote photoplethysmography layer. It
+auto-detects whether a video frame contains a face (MediaPipe BlazeFace
+full-range) and is inactive (score None, contributes 0 to fusion) on non-face
+videos/images. It is confidence-weighted and fusion-only — never decisive
+alone — because modern high-quality fakes can synthesize a heartbeat
+(Seibold et al., Frontiers in Imaging 2025).
+
+Runtime dependency added: `mediapipe==1.1.0` in `requirements-render.txt`.
+The face model asset (`forensics/models/blaze_face_full_range.tflite`, ~1.08 MB)
+is bundled in the repo and ships inside the Docker image via
+`COPY ... forensics/ ... /app/` in the Dockerfile. The model is NOT inside the
+mediapipe wheel — it must be present at the relative path above, or the rPPG
+layer becomes inactive with a clear reason.
+
+Calibration caveat: do not quote any accuracy number (including the commonly-
+seen "96% rPPG" headline) until it is pinned to a specific detector/dataset/
+source. The 96%/NVIDIA figure is not cleanly attributable to a single NVIDIA
+detector in available sources; treat it as unconfirmed until sourced. Real
+dataset-specific numbers exist in the broader rPPG/face-forensics literature
+(FaceForensics++ papers report 91–99% depending on method and manipulation; a
+rounded ~96% AUC figure appears for other deepfake-detection methods).
+
+Nothing in `server.py` or the existing forensic layers needed changing for
+rppg beyond the new module import + per-window rppg fields.

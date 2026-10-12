@@ -1,0 +1,463 @@
+{
+  "run_at": "2026-10-10T22:34:59+0530",
+  "base_url": "http://localhost:5001",
+  "results": [
+    {
+      "id": "ig-ai-reel-01",
+      "url": "https://www.instagram.com/p/DdmbzhFPOsZ/",
+      "expected": "ai",
+      "expected_tiers": [
+        "SYNTHETIC_AI",
+        "SUSPICIOUS"
+      ],
+      "kind": "video",
+      "http_status": 200,
+      "score": 66,
+      "tier": "SUSPICIOUS",
+      "confidence": "LOW",
+      "short_label": "Altered region detected",
+      "alteration": {
+        "label": "likely",
+        "score": 72,
+        "short_label": "Altered region detected",
+        "reasons": [
+          "Wavelet high-frequency energy deficit (ratio 0.0033) \u2014 synthetic smoothness."
+        ]
+      },
+      "ai_artifact": {
+        "label": "likely",
+        "score": 60,
+        "short_label": "Has AI artifacts",
+        "reasons": [
+          "Wavelet high-frequency energy deficit (ratio 0.0033) \u2014 synthetic smoothness."
+        ]
+      },
+      "video_source": "ig-ai-reel-01 (yt-dlp mp4)",
+      "metadata_source": "none",
+      "metadata_markers": [],
+      "cached": false,
+      "pwtf_metrics": {
+        "coherence_p05": 0.573,
+        "hotspot_fraction": 0.202,
+        "hotspot_cluster": 0.56
+      },
+      "breakdown": {},
+      "window_details": {},
+      "top_reasons": [
+        "No C2PA Content Credentials manifest embedded in file.",
+        "No SynthID imperceptible watermark carrier detected.",
+        "DetectZoo (CNNSpotDetector) spatial classifier: 0% confidence.",
+        "Patch anomaly map: 16/256 patches inconsistent with the frame's own texture norm (mean deviation 0.33) - regional highlight only, not an absolute AI verdict.",
+        "Wavelet high-frequency energy deficit (ratio 0.0033) \u2014 synthetic smoothness."
+      ],
+      "pass": true,
+      "elapsed_s": 8.8
+    },
+    {
+      "id": "ig-ai-reel-02",
+      "url": "https://www.instagram.com/p/DcCecK7gS-T/",
+      "expected": "ai",
+      "expected_tiers": [
+        "SYNTHETIC_AI",
+        "SUSPICIOUS"
+      ],
+      "kind": "video",
+      "http_status": 200,
+      "score": 66,
+      "tier": "SUSPICIOUS",
+      "confidence": "LOW",
+      "short_label": "Altered region detected",
+      "alteration": {
+        "label": "likely",
+        "score": 72,
+        "short_label": "Altered region detected",
+        "reasons": [
+          "Wavelet high-frequency energy deficit (ratio 0.0008) \u2014 synthetic smoothness."
+        ]
+      },
+      "ai_artifact": {
+        "label": "likely",
+        "score": 60,
+        "short_label": "Has AI artifacts",
+        "reasons": [
+          "Wavelet high-frequency energy deficit (ratio 0.0008) \u2014 synthetic smoothness."
+        ]
+      },
+      "video_source": "ig-ai-reel-02 (yt-dlp mp4)",
+      "metadata_source": "none",
+      "metadata_markers": [],
+      "cached": false,
+      "pwtf_metrics": {
+        "coherence_p05": 0.639,
+        "hotspot_fraction": 0.068,
+        "hotspot_cluster": 0.508
+      },
+      "breakdown": {},
+      "window_details": {},
+      "top_reasons": [
+        "No C2PA Content Credentials manifest embedded in file.",
+        "No SynthID imperceptible watermark carrier detected.",
+        "DetectZoo (CNNSpotDetector) spatial classifier: 0% confidence.",
+        "Patch anomaly map: 3/256 patches inconsistent with the frame's own texture norm (mean deviation 0.22) - regional highlight only, not an absolute AI verdict.",
+        "Wavelet high-frequency energy deficit (ratio 0.0008) \u2014 synthetic smoothness."
+      ],
+      "pass": true,
+      "elapsed_s": 12.9
+    },
+    {
+      "id": "ig-ai-reel-03",
+      "url": "https://www.instagram.com/p/DduaXstRCdl",
+      "expected": "ai",
+      "expected_tiers": [
+        "SYNTHETIC_AI",
+        "SUSPICIOUS"
+      ],
+      "kind": "video",
+      "http_status": 200,
+      "score": 79,
+      "tier": "SUSPICIOUS",
+      "confidence": "LOW",
+      "short_label": "Altered region detected",
+      "alteration": {
+        "label": "likely",
+        "score": 72,
+        "short_label": "Altered region detected",
+        "reasons": [
+          "Source label declares an AI generator (higgsfield). Provenance claim - the file itself carries no AI metadata (social platforms strip it).",
+          "Wavelet high-frequency energy deficit (ratio 0.0013) \u2014 synthetic smoothness."
+        ]
+      },
+      "ai_artifact": {
+        "label": "likely",
+        "score": 72,
+        "short_label": "Has AI artifacts",
+        "reasons": [
+          "Source label declares an AI generator (higgsfield). Provenance claim - the file itself carries no AI metadata (social platforms strip it).",
+          "Wavelet high-frequency energy deficit (ratio 0.0013) \u2014 synthetic smoothness."
+        ]
+      },
+      "video_source": "ig-ai-reel-03 (yt-dlp mp4)",
+      "metadata_source": "none",
+      "metadata_markers": [],
+      "cached": false,
+      "pwtf_metrics": {
+        "coherence_p05": 0.0,
+        "hotspot_fraction": 0.4307,
+        "hotspot_cluster": 0.9938
+      },
+      "breakdown": {},
+      "window_details": {},
+      "top_reasons": [
+        "No C2PA Content Credentials manifest embedded in file.",
+        "No SynthID imperceptible watermark carrier detected.",
+        "Source label declares an AI generator (higgsfield). Provenance claim - the file itself carries no AI metadata (social platforms strip it).",
+        "DetectZoo (CNNSpotDetector) spatial classifier: 0% confidence.",
+        "Patch anomaly map: 2/256 patches inconsistent with the frame's own texture norm (mean deviation 0.20) - regional highlight only, not an absolute AI verdict."
+      ],
+      "pass": true,
+      "elapsed_s": 16.0
+    },
+    {
+      "id": "ig-ai-reel-04",
+      "url": "https://www.instagram.com/downey.ai/reel/DdfROhPxo5G/",
+      "expected": "ai",
+      "expected_tiers": [
+        "SYNTHETIC_AI",
+        "SUSPICIOUS"
+      ],
+      "kind": "video",
+      "http_status": 200,
+      "score": 79,
+      "tier": "SUSPICIOUS",
+      "confidence": "LOW",
+      "short_label": "Altered region detected",
+      "alteration": {
+        "label": "likely",
+        "score": 72,
+        "short_label": "Altered region detected",
+        "reasons": [
+          "Source label declares an AI generator (genjutsu). Provenance claim - the file itself carries no AI metadata (social platforms strip it).",
+          "Wavelet high-frequency energy deficit (ratio 0.0021) \u2014 synthetic smoothness."
+        ]
+      },
+      "ai_artifact": {
+        "label": "likely",
+        "score": 72,
+        "short_label": "Has AI artifacts",
+        "reasons": [
+          "Source label declares an AI generator (genjutsu). Provenance claim - the file itself carries no AI metadata (social platforms strip it).",
+          "Wavelet high-frequency energy deficit (ratio 0.0021) \u2014 synthetic smoothness."
+        ]
+      },
+      "video_source": "ig-ai-reel-04 (yt-dlp mp4)",
+      "metadata_source": "none",
+      "metadata_markers": [],
+      "cached": false,
+      "pwtf_metrics": {
+        "coherence_p05": 0.0,
+        "hotspot_fraction": 0.4307,
+        "hotspot_cluster": 0.9938
+      },
+      "breakdown": {},
+      "window_details": {},
+      "top_reasons": [
+        "No C2PA Content Credentials manifest embedded in file.",
+        "No SynthID imperceptible watermark carrier detected.",
+        "Source label declares an AI generator (genjutsu). Provenance claim - the file itself carries no AI metadata (social platforms strip it).",
+        "DetectZoo (CNNSpotDetector) spatial classifier: 0% confidence.",
+        "Patch anomaly map: 84/256 patches inconsistent with the frame's own texture norm (mean deviation 0.31) - regional highlight only, not an absolute AI verdict."
+      ],
+      "pass": true,
+      "elapsed_s": 12.2
+    },
+    {
+      "id": "ig-human-post-01",
+      "url": "https://www.instagram.com/p/DdgYCT5B6mn/",
+      "expected": "human",
+      "expected_tiers": [
+        "AUTHENTIC_HUMAN",
+        "INCONCLUSIVE"
+      ],
+      "kind": "video",
+      "http_status": 200,
+      "score": 12,
+      "tier": "AUTHENTIC_HUMAN",
+      "confidence": "LOW",
+      "short_label": "No clear alteration or AI artifacts detected",
+      "alteration": {
+        "label": "unlikely",
+        "score": 12,
+        "short_label": "No clear alteration evidence",
+        "reasons": [
+          "No clear alteration signal."
+        ]
+      },
+      "ai_artifact": {
+        "label": "unlikely",
+        "score": 12,
+        "short_label": "No clear AI-artifact evidence",
+        "reasons": [
+          "No clear AI-artifact signal."
+        ]
+      },
+      "video_source": "ig-human-post-01 (yt-dlp mp4)",
+      "metadata_source": "none",
+      "metadata_markers": [],
+      "cached": false,
+      "pwtf_metrics": {
+        "coherence_p05": 0.67,
+        "hotspot_fraction": 0.0,
+        "hotspot_cluster": 0.0
+      },
+      "breakdown": {},
+      "window_details": {},
+      "top_reasons": [
+        "No C2PA Content Credentials manifest embedded in file.",
+        "No SynthID imperceptible watermark carrier detected.",
+        "DetectZoo (CNNSpotDetector) spatial classifier: 0% confidence.",
+        "Patch anomaly map: 0/256 patches inconsistent with the frame's own texture norm (mean deviation 0.16) - regional highlight only, not an absolute AI verdict.",
+        "Wavelet high-frequency energy deficit (ratio 0.0005) \u2014 synthetic smoothness."
+      ],
+      "pass": true,
+      "elapsed_s": 10.9
+    },
+    {
+      "id": "web-ai-fortnite-brainrot",
+      "url": "https://imgs.search.brave.com/YIZLGnF-0gz7cMH2exmxtzgQZ4uEBoFwStXosMAjKpE/rs:fit:860:0:0:0/g:ce/aHR0cHM6Ly93d3cuY2dnYW1lc24uY29tL3dwLWNvbnRlbnQvc2l0ZXMvcGNnYW1lc24vMjAyNi8wNC9mb3J0bml0ZS1icmFpbnJvdC1idW5kbGUtYXRlbS1zaG9wLW91dC1ub3ctYWktbWVtYmVyLWNhcmFjdGVycy1idW5rLXR1bmctdHVuZy10dW5nLXNhaHVyLTc3Nng0MzYuanBn",
+      "expected": "ai",
+      "expected_tiers": [
+        "SYNTHETIC_AI",
+        "SUSPICIOUS"
+      ],
+      "kind": "image",
+      "http_status": 200,
+      "score": 70,
+      "tier": "SUSPICIOUS",
+      "confidence": "LOW",
+      "short_label": "Has AI artifacts",
+      "alteration": {
+        "label": "unlikely",
+        "score": 12,
+        "short_label": "No clear alteration evidence",
+        "reasons": [
+          "No clear alteration signal."
+        ]
+      },
+      "ai_artifact": {
+        "label": "yes",
+        "score": 83,
+        "short_label": "Has AI artifacts",
+        "reasons": [
+          "Single AI metadata marker found in the file: url_path midjourney:'Mj'."
+        ]
+      },
+      "video_source": null,
+      "metadata_source": "url",
+      "metadata_markers": [
+        "url_path midjourney:'Mj'"
+      ],
+      "cached": false,
+      "pwtf_metrics": null,
+      "breakdown": {},
+      "window_details": {},
+      "top_reasons": [
+        "No C2PA Content Credentials manifest embedded in file.",
+        "No SynthID imperceptible watermark carrier detected.",
+        "Single AI metadata marker found in the file: url_path midjourney:'Mj'.",
+        "DetectZoo (CNNSpotDetector) spatial classifier: 0% confidence.",
+        "Patch anomaly map: 14/256 patches inconsistent with the frame's own texture norm (mean deviation 0.21) - regional highlight only, not an absolute AI verdict."
+      ],
+      "pass": true,
+      "elapsed_s": 3.0
+    },
+    {
+      "id": "web-ai-guardian-still",
+      "url": "https://imgs.search.brave.com/Hrd39G_YJAIHnoRE2LgyRg-eVU4DOmM5rga9XVsAsR4/rs:fit:860:0:0:0/g:ce/aHR0cHM6Ly9pLmd1aW0uY28udWsvaW1nL21lZGlhLzAzYmJhMDIxMmVlNDE5YTQyNGEzMzY3YzI4NzY3N2I5MGU1YmQ3Mi8xXzExXzE3OTZfMTQzNl8xNDM2L21hc3Rlci8xNzk2LmpwZ3ZpZHRoPTQ2NSZkcHI9MSZzaT1ub25lJmNyb3A9bm9uZ",
+      "expected": "ai",
+      "expected_tiers": [
+        "SYNTHETIC_AI",
+        "SUSPICIOUS"
+      ],
+      "kind": "image",
+      "http_status": 200,
+      "score": 70,
+      "tier": "SUSPICIOUS",
+      "confidence": "LOW",
+      "short_label": "Has AI artifacts",
+      "alteration": {
+        "label": "unlikely",
+        "score": 12,
+        "short_label": "No clear alteration evidence",
+        "reasons": [
+          "No clear alteration signal."
+        ]
+      },
+      "ai_artifact": {
+        "label": "yes",
+        "score": 83,
+        "short_label": "Has AI artifacts",
+        "reasons": [
+          "Single AI metadata marker found in the file: url_path midjourney:'mJ'."
+        ]
+      },
+      "video_source": null,
+      "metadata_source": "url",
+      "metadata_markers": [
+        "url_path midjourney:'mJ'"
+      ],
+      "cached": false,
+      "pwtf_metrics": null,
+      "breakdown": {},
+      "window_details": {},
+      "top_reasons": [
+        "No C2PA Content Credentials manifest embedded in file.",
+        "No SynthID imperceptible watermark carrier detected.",
+        "Single AI metadata marker found in the file: url_path midjourney:'mJ'.",
+        "DetectZoo (CNNSpotDetector) spatial classifier: 0% confidence.",
+        "Patch anomaly map: 22/256 patches inconsistent with the frame's own texture norm (mean deviation 0.22) - regional highlight only, not an absolute AI verdict."
+      ],
+      "pass": true,
+      "elapsed_s": 3.2
+    },
+    {
+      "id": "web-ai-italian-brainrot-poster",
+      "url": "https://imgs.search.brave.com/_DO9REk6x1lF1iwU6qKjSE_qJyDraOBWoCVlxoJ1GEI/rs:fit:860:0:0:0/g:ce/aHR0cHM6Ly9icmFpbnJvdGNoYXJhY3Rlcy5uZXRcL3dwLWNvbnRlbnRcL3VwbG9hZHMvQWxsLVJhdGxhLUIyM0Etc19CbGFua1JvY3RYLUFTRVJMX1NFTEVDVCA5NzB4MjA2LTElMjAyMDE2LTExLTYwNS5qZYa",
+      "expected": "ai",
+      "expected_tiers": [
+        "SYNTHETIC_AI",
+        "SUSPICIOUS"
+      ],
+      "kind": "image",
+      "http_status": 200,
+      "score": 92,
+      "tier": "SYNTHETIC_AI",
+      "confidence": "MEDIUM",
+      "short_label": "No clear alteration or AI artifacts detected",
+      "alteration": {
+        "label": "unlikely",
+        "score": 12,
+        "short_label": "No clear alteration evidence",
+        "reasons": [
+          "No clear alteration signal."
+        ]
+      },
+      "ai_artifact": {
+        "label": "unlikely",
+        "score": 20,
+        "short_label": "No clear AI-artifact evidence",
+        "reasons": [
+          "No clear AI-artifact signal."
+        ]
+      },
+      "video_source": null,
+      "metadata_source": "c2pa",
+      "metadata_markers": [
+        "Claim generator identified AI tool 'Veo' (family: video_diffusion)."
+      ],
+      "cached": false,
+      "pwtf_metrics": null,
+      "breakdown": {},
+      "window_details": {},
+      "top_reasons": [
+        "C2PA / Provenance Manifest: Claim generator identified AI tool 'Veo' (family: video_diffusion).",
+        "No SynthID imperceptible watermark carrier detected.",
+        "DetectZoo (CNNSpotDetector) spatial classifier: 0% confidence.",
+        "Patch anomaly map: 1/256 patches inconsistent with the frame's own texture norm (mean deviation 0.17) - regional highlight only, not an absolute AI verdict.",
+        "Dense render-collage signature (strong): hyper-saturated (0.53 mean saturation) image with an extremely dense palette (1558 colors), dense outlines (edge density 21.5%) and a UNIFORM tile grid - every cell of a 4x4 partition is equally busy"
+      ],
+      "pass": true,
+      "elapsed_s": 2.7
+    },
+    {
+      "id": "ig-deipai-m0mj",
+      "url": "https://www.instagram.com/p/DeIpAi_M0mj/",
+      "expected": "ai",
+      "expected_tiers": [
+        "SYNTHETIC_AI",
+        "SUSPICIOUS"
+      ],
+      "kind": "video",
+      "http_status": 200,
+      "score": 66,
+      "tier": "SUSPICIOUS",
+      "confidence": "LOW",
+      "short_label": "Altered region detected",
+      "alteration": {
+        "label": "likely",
+        "score": 72,
+        "short_label": "Altered region detected",
+        "reasons": [
+          "Wavelet high-frequency energy deficit (ratio 0.0029) \u2014 synthetic smoothness."
+        ]
+      },
+      "ai_artifact": {
+        "label": "likely",
+        "score": 60,
+        "short_label": "Has AI artifacts",
+        "reasons": [
+          "Wavelet high-frequency energy deficit (ratio 0.0029) \u2014 synthetic smoothness."
+        ]
+      },
+      "video_source": "ig-deipai-m0mj (yt-dlp mp4)",
+      "metadata_source": "none",
+      "metadata_markers": [],
+      "cached": false,
+      "pwtf_metrics": {
+        "coherence_p05": 0.553,
+        "hotspot_fraction": 0.245,
+        "hotspot_cluster": 0.628
+      },
+      "breakdown": {},
+      "window_details": {},
+      "top_reasons": [
+        "No C2PA Content Credentials manifest embedded in file.",
+        "No SynthID imperceptible watermark carrier detected.",
+        "DetectZoo (CNNSpotDetector) spatial classifier: 0% confidence.",
+        "Patch anomaly map: 0/256 patches inconsistent with the frame's own texture norm (mean deviation 0.19) - regional highlight only, not an absolute AI verdict.",
+        "Wavelet high-frequency energy deficit (ratio 0.0029) \u2014 synthetic smoothness."
+      ],
+      "pass": true,
+      "elapsed_s": 16.1
+    }
+  ]
+}

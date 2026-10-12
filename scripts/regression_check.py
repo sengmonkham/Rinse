@@ -281,6 +281,7 @@ def main():
         return 2
 
     server_proc = None
+    health = None
     if args.start_server:
         health = wait_for_health(timeout_s=3)
         if health:

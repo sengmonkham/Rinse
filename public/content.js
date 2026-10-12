@@ -555,20 +555,29 @@ const checkAiVideoHosts = (url) => {
 
   const aiVideoHosts = [
     { host: "sora", label: "OpenAI Sora" },
+    { host: "openai-sora", label: "OpenAI Sora" },
     { host: "runwayml", label: "Runway ML" },
     { host: "runway", label: "Runway" },
+    { host: "gen-2", label: "Runway Gen-2" },
     { host: "pika-ai", label: "Pika Labs" },
     { host: "pika", label: "Pika" },
+    { host: "pikart", label: "Pika RT" },
     { host: "lumaai", label: "Luma Dream Machine" },
     { host: "lumalabs", label: "Luma Labs" },
+    { host: "luma", label: "Luma AI" },
+    { host: "dream-machine", label: "Dream Machine" },
     { host: "kaiber", label: "Kaiber" },
     { host: "deforum", label: "Deforum (Stable Diffusion)" },
     { host: "stable-video-diffusion", label: "Stable Video Diffusion" },
     { host: "zeroscope", label: "ZeroScope" },
     { host: "moondream", label: "MoonDream" },
-    { host: " KlingAI", label: "Kling AI" },
+    { host: "klingai", label: "Kling AI" },
+    { host: "kling", label: "Kling" },
     { host: "hailuo", label: "Hailuo AI" },
     { host: "minimax", label: "MiniMax" },
+    { host: "higgsfield", label: "Higgsfield" },
+    { host: "genjutsu", label: "Higgsfield Genjutsu" },
+    { host: "veo", label: "Google Veo" },
   ];
 
   for (const { host, label } of aiVideoHosts) {
@@ -1582,7 +1591,7 @@ const inspectImageDOMContext = (img) => {
   const src = img.src || '';
 
   // Expanded keyword regex to cover more systems
-  const aiKeywordRegex = /(\bai[- ]generated\b|generative|midjourney|dall-e|dalle|stable[- ]diffusion|flux[-.]1|adobe[- ]firefly|deepai|leonardo[- ]ai|civitai|flux[- ]ai|created (with|by) ai|made (with|by) ai)/i;
+  const aiKeywordRegex = /(\bai[- ]generated\b|generative|midjourney|midjourney\s*v[3-7]|dall[-.]e|dalle|stable[- ]diffusion|sdturbo|sdxl|stable[- ]video[- ]diffusion|svd|flux[-.]1|flux[.\-_ ]?[012]|black[- ]forest|adobe[- ]firefly|firefly|deepai|leonardo[-.]ai|leonardo.ai|civitai|created (with|by) ai|made (with|by) ai|novelai|runway|runwayml|pika|luma|sora|veo|kling|higgsfield|genjutsu|imagen|ideogram|recraft|comfyui|automatic1111|invokeai|fooocus)/i;
 
   // AI attribution declared by the page itself (alt text, title attribute).
   // The backend never sees these page-local labels, so they are surfaced here
@@ -2550,9 +2559,45 @@ const performPageScan = async (options = { text: true, images: true, videos: tru
           // or an un-decoded <video>). Do not stay silent: send the direct
           // source URL to the backend - yt-dlp resolves platform links and
           // direct file URLs are downloaded and decoded server-side.
+          // Collect page context for video provenance detection (matches image scan behavior)
+          const videoContext = (() => {
+            const ctx = {};
+            // Check if video has a caption (e.g., Instagram/TikTok captions in data attributes or sibling elements)
+            const parent = vid.parentElement;
+            if (parent) {
+              // Check for common caption/data attributes
+              const captionAttrs = ['data-caption', 'aria-label', 'title'];
+              for (const attr of captionAttrs) {
+                const val = parent.getAttribute(attr);
+                if (val && val.trim()) {
+                  ctx.source_caption = val.trim().slice(0, 1000);
+                  break;
+                }
+              }
+              // Check for figcaption or sibling text
+              const figure = parent.closest('figure');
+              if (figure) {
+                const cap = figure.querySelector('figcaption');
+                if (cap && cap.innerText.trim()) {
+                  ctx.source_caption = cap.innerText.trim().slice(0, 1000);
+                }
+              }
+              // Page title as fallback context
+              if (document.title && document.title.trim()) {
+                ctx.page_title = document.title.trim().slice(0, 200);
+              }
+              try { ctx.page_url = window.location.href.slice(0, 500); } catch (e) {}
+            }
+            return ctx;
+          })();
+          
           const res = await new Promise((resolve) => {
             try {
-              chrome.runtime.sendMessage({ action: "analyzeVideoUrl", url: src }, (r) => resolve(r || null));
+              chrome.runtime.sendMessage({ 
+                action: "analyzeVideoUrl", 
+                url: src,
+                context: videoContext
+              }, (r) => resolve(r || null));
             } catch { resolve(null); }
           });
           if (res && res.found && typeof res.score === "number") {

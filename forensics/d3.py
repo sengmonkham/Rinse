@@ -212,7 +212,7 @@ def analyze_second_order_dynamics(
             f"overlaps between physical motion and generation (calibrated, "
             f"see forensics/eval_d3.py); the ICCV 2025 result requires "
             f"semantic-encoder features. Direction per paper: LOW volatility "
-            f"= too-smooth motion = generation-like.",
+            f"= too-smooth motion = generation-like (LOW => AI, HIGH => real).",
         ]
 
         metrics = {

@@ -61,34 +61,45 @@ from typing import Any, Dict, List, Optional
 
 # Specific generator tools -> strong markers. Long unique names may match as
 # plain substrings; short/ambiguous names are matched with word boundaries.
+# Each entry: key = canonical name, value = regex pattern (case-insensitive).
+# Generators are grouped by family for reporting clarity.
 _STRONG_TOOLS = {
-    "sora": r"\bsora\b",
-    "openai sora": r"openai\s+sora",
-    "veo": r"\bveo\d?\b",
-    "runway": r"\brunway(ml)?\b",
-    "higgsfield": r"higgsfield",
-    "kling": r"\bkling\b",
-    "hailuo": r"\bhailuo\b",
-    "minimax": r"\bminimax\b",
-    "pika labs": r"\bpika\b",
-    "luma dream machine": r"luma\s+dream\s+machine|\bluma\s+ai\b|dream\s?machine",
-    "midjourney": r"midjourney",
-    "stable diffusion": r"stable\s?-?diffusion|\bsdturbo\b|\bsdxl\b",
-    "dall-e": r"dall[·.\- ]?e\b",
-    "comfyui": r"comfy\s?ui",
-    "automatic1111": r"automatic1111|a1111",
-    "invokeai": r"invoke\s?ai",
+    # Video generators
+    "sora": r"\bsora(?:\b|_)|sora\s+by\s+openai|openai\s+sora|sora[-_]?(?:clip|video|gen|generation)",
+    "openai sora": r"openai\s+sora|sora\s+by\s+openai",
+    "veo": r"\bveo\d?\b|google\s+veo",
+    "runway": r"\brunway(ml)?\b|runway\s+gen|gen[-:]2",
+    "higgsfield": r"higgsfield|genjutsu",
+    "kling": r"\bkling\b|kling\s+ai|kling\s+video",
+    "hailuo": r"\bhailuo\b|hai\s?luo|minimax\s+video",
+    "minimax": r"\bminimax\b|minimax\s+video",
+    "pika labs": r"\bpika\b|pika\s+labs|pika\s+video|pikart",
+    "luma dream machine": r"luma\s+dream\s+machine|\bluma\s+ai\b|dream\s?machine|luma\s+video",
+    # Image generators - major
+    "midjourney": r"midjourney|midjourney\s+v[3-7]|mj\s*(?:v\d)?|mj\.?run",
+    "stable diffusion": r"stable\s?-?diffusion|\bsdturbo\b|\bsdxl\b|stable\s+video\s+diffusion|svd\b",
+    "dall-e": r"dall[·.\- ]?e\b|dalle|openai\s+\*?dall|openai\s+dall|dall\s*[-:]?e(?:\s*3)?",
+    "comfyui": r"comfy\s?ui|comfyworkflows",
+    "automatic1111": r"automatic1111|a1111|stable\s+diffusion\s+webui",
+    "invokeai": r"invoke\s?ai|invoke\s+ai",
     "fooocus": r"fooocus",
-    "novelai": r"novel\s?ai\b",
-    "adobe firefly": r"firefly",
-    "grok imagine": r"grok\s+imagine",
-    "flux.1": r"\bflux[.\-_ ]?[012]\b",
-    "leonardo.ai": r"leonardo\.(ai|dio)",
-    "ideogram": r"\bideogram\b",
-    "recraft": r"\brecraft\b",
-    "elevenlabs": r"eleven\s?labs",
-    "imagen": r"\bimagen\b",
-    "copilot creative": r"copilot\s+(creative|image)",
+    "novelai": r"novel\s?ai\b|novelai\s+(?:image|diffusion)",
+    "adobe firefly": r"firefly|adobe\s+firefly|generative\s+fill",
+    "grok imagine": r"grok\s+imagine|grok\s*(?:2|3)?\s*(?:imagine|ai)",
+    "flux.1": r"\bflux[.\-_ ]?[012]\b|black\s*[-]?\s*forest\s+\*?labs",
+    "leonardo.ai": r"leonardo\.(ai|dio)|leonardo\s+ai",
+    "ideogram": r"\bideogram\b|ideogram\s+(?:2|3)?",
+    "recraft": r"\brecraft\b|recraft\s+v[12]",
+    "elevenlabs": r"eleven\s?labs|elevenlabs\s+(?:video|speech)",
+    "imagen": r"\bimagen\b|google\s+imagen|imagen\s+[23]",
+    "copilot creative": r"copilot\s+(creative|image|designer)",
+    # Additional generators
+    "bing image creator": r"bing\s+(?:image|creator)|microsoft\s+designer",
+    "craiyon": r"craiyon|hot[.]?\s*dall",
+    "playgroundai": r"playground\s*(?:ai)?|playground\s+ai",
+    "starryai": r"starry\s*(?:ai)?|starryai",
+    "nightcafe": r"night\s*cafe|nightcafe",
+    "dreamstudio": r"dream\s*studio|stability\s+ai",
 }
 
 # Weak/ambiguous markers: generic AI-language without a specific tool name.
@@ -110,6 +121,11 @@ _WEAK_PATTERNS = {
 _FILE_STRONG_REGEX_LIST = [
     re.compile(r"action[\"'\s:]{0,6}(ai_)?generated", re.IGNORECASE),
     re.compile(r"digitalsourcetype", re.IGNORECASE),
+    re.compile(r"trainedalgorithmicmedia|compositesynthetic", re.IGNORECASE),
+    re.compile(r"c2pa[\"'\s:]{0,6}claim[\"'\s:]{0,6}generator", re.IGNORECASE),
+    re.compile(r"xmp\:[\"'\s:]{0,6}iptc\:digitalsourcetype", re.IGNORECASE),
+    re.compile(r"photoshop\:[\"'\s:]{0,6}credit\b|photoshop\:[\"'\s:]{0,6}creator\s*tool", re.IGNORECASE),
+    re.compile(r"software\s*[:=]\s*[\"']?(?:midjourney|dalle|stable\s*diffusion|comfy|invoke|automatic1111)", re.IGNORECASE),
 ]
 
 # Camera provenance: a FULL EXIF set (Make+Model+DateTime) suggests a real
@@ -195,17 +211,73 @@ def _scan_text_for_markers(text: str) -> tuple:
     return strong, weak
 
 
+def _parse_mp4_atoms(raw: bytes) -> List[str]:
+    """Parse MP4/MOV container atoms for generator-related metadata.
+
+    MP4 containers store metadata in atoms (boxes). Key atoms for AI detection:
+    - udta (user data) contains handler/generator info
+    - free/void atoms sometimes contain leftover generator strings
+    - Metadata atoms (mdhd, hdlr) can carry generator names
+    - co64/compact atoms may contain generator tool references
+
+    Scans both head and tail since moov can be at either end.
+    """
+    if not raw or len(raw) < 8:
+        return []
+    
+    found = []
+    # Scan both head and tail of file
+    scan_regions = [raw[:_HEAD_SCAN]]
+    if len(raw) > _HEAD_SCAN:
+        scan_regions.append(raw[-_TAIL_SCAN:])
+    
+    for region in scan_regions:
+        try:
+            text = region.decode("latin-1", errors="ignore").lower()
+        except Exception:
+            continue
+        
+        # Look for common MP4 metadata atom patterns containing generator info
+        # udta (user data) atoms often contain generator tool names
+        udta_patterns = [
+            r"udta[\x00]*[^\x00]{8,200}(?:midjourney|dalle|stable.?diffusion|runway|pika|luma|kling|higgsfield|veo|sora|comfy|invoke|firefly|flux|leondardo|ideogram)",
+            r"free[\x00]*[^\x00]{8,100}(?:midjourney|dalle|stable.?diffusion|runway|pika|luma|kling|higgsfield|veo|sora|comfy|invoke|firefly|flux)",
+            r"moov[\x00]{0,20}.*?(?:midjourney|dalle|stable.?diffusion|runway|pika|luma|kling|higgsfield|veo|sora|comfy|invoke|firefly|flux)",
+        ]
+        for pat in udta_patterns:
+            try:
+                for m in re.finditer(pat, text):
+                    hit = m.group(0).strip()
+                    # Extract just the generator mention
+                    for gen_name, gen_rx in _STRONG_RES:
+                        gm = gen_rx.search(hit)
+                        if gm and len(gm.group(0)) > 2:
+                            found.append(f"MP4 container atom: generator '{gm.group(0)[:40]}' in metadata")
+                            break
+            except re.error:
+                continue
+    
+    return found
+
+
 def _binary_ai_markers(raw: bytes) -> List[str]:
     """Scan raw file bytes (head+tail) for in-file AI assertions."""
     if not raw:
         return []
-    chunk = (raw[:_HEAD_SCAN] + (raw[-_TAIL_SCAN:] if len(raw) > _HEAD_SCAN else b""))
+    found = []
+    
+    # For video files, parse MP4/MOV container atoms first
+    chunk = raw[:_HEAD_SCAN] + (raw[-_TAIL_SCAN:] if len(raw) > _HEAD_SCAN else b"")
     try:
         text = chunk.decode("latin-1", errors="ignore")
     except Exception:
-        return []
+        return found
     lowered = text.lower()
-    found = []
+    
+    # MP4 container metadata parsing
+    mp4_markers = _parse_mp4_atoms(raw)
+    found.extend(mp4_markers)
+    
     if "trainedalgorithmicmedia" in lowered:
         found.append("C2PA digitalSourceType 'trainedAlgorithmicMedia' (declared AI generation)")
     if "compositesynthetic" in lowered:
@@ -215,6 +287,18 @@ def _binary_ai_markers(raw: bytes) -> List[str]:
             m = rx.search(lowered)
             if m:
                 found.append(f"C2PA/Content Credentials AI action assertion ('{m.group(0)[:40]}')")
+    
+    # Check for explicit generator claims in XMP/IPTC metadata
+    xmp_patterns = [
+        (r"xmp:_creator_tool[\"'\s:]{0,6}[\"']?(midjourney|dalle|stable.?diffusion|runway|pika|luma|kling|higgsfield|veo|sora|comfy|invoke|firefly|flux)", "XMP creator tool"),
+        (r"iptc\:digitalsourcetype[\"'\s:]{0,6}[\"']?(trainedAlgorithmicMedia|compositeSynthetic)", "IPTC digitalSourceType"),
+        (r"photoshop\:credit[\"'\s:]{0,6}[\"']?(midjourney|dalle|stable.?diffusion|runway|pika|luma|kling|higgsfield|veo|sora)", "Photoshop credit"),
+    ]
+    for pat, label in xmp_patterns:
+        m = re.search(pat, lowered)
+        if m:
+            found.append(f"{label} assertion in file metadata: '{m.group(0)[:60]}'")
+    
     # Generator software strings inside the file (metadata atoms, PNG chunks):
     for name, rx in _STRONG_RES:
         m = rx.search(lowered)
@@ -229,7 +313,9 @@ def _binary_ai_markers(raw: bytes) -> List[str]:
             window = lowered[max(0, m.start() - 200):m.end() + 200]
             if not _META_CONTEXT_RX.search(window):
                 continue
-        found.append(f"generator tool string '{m.group(0)[:40]}' embedded in file metadata")
+        # Avoid double-counting if already found via XMP/IPTC parsing
+        if not any(name.lower() in f.lower() for f in found):
+            found.append(f"generator tool string '{m.group(0)[:40]}' embedded in file metadata")
     return found
 
 
@@ -362,15 +448,24 @@ def probe_ai_metadata(
 
             path = unquote(urlparse(source_url).path or "")
             fname = os.path.basename(path)
+            # Also scan the full URL path for generator hints (not just basename)
+            # e.g. /uploads/sora-generations/clip-001.mp4
+            full_path = unquote(urlparse(source_url).path or "")
         except Exception:
             fname = source_url[-80:]
+            full_path = source_url[-200:]
         # NOTE: no .lower() here - base64url payloads in proxy URLs are
         # case-sensitive and lowercasing breaks their decode; the marker
         # regexes are compiled with re.IGNORECASE anyway.
-        s, w = _scan_text_for_markers(_decode_url_payloads(fname))
+        # Scan both the filename AND the full path for generator hints
+        combined_path_text = _decode_url_payloads(f"{fname} {full_path}")
+        s, w = _scan_text_for_markers(combined_path_text)
         strong_label += len(s)
         weak_label += len(w)
-        markers.extend(f"filename {m}" for m in s + w)
+        if s:
+            markers.extend(f"url_path {m}" for m in s)
+        if w:
+            markers.extend(f"url_path weak {m}" for m in w)
 
     # 4. Source caption / page title (caller-supplied provenance label).
     if source_caption:
@@ -434,6 +529,20 @@ def probe_ai_metadata(
         # corroborated by anything else stays at 75 - the file evidence alone
         # is what makes a hard provenance assertion.
         score = 95 if strong >= 2 and strong_file >= 2 else 75
+        # Boost score for specific, well-known generator detections (higher
+        # confidence, less likely to be a false positive)
+        if strong_file >= 1:
+            for marker in markers:
+                # Known high-confidence video generators
+                if any(g in marker.lower() for g in ("sora", "veo", "runway", "kling", "pika", "luma", "higgsfield")):
+                    if score < 85:
+                        score = 85  # Video generator detected in-file
+                    break
+                # Known high-confidence image generators  
+                if any(g in marker.lower() for g in ("midjourney", "dall-e", "dall\u2022e", "flux")):
+                    if score < 80:
+                        score = 80  # Major image generator detected
+                    break
         return {
             "score": score,
             "source": "file+label" if strong_file else "source_label",

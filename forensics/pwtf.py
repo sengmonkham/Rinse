@@ -42,6 +42,7 @@ CPU-only, numpy + PIL, no weights, no network.  Latency ~tens of ms for
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -49,7 +50,17 @@ import numpy as np
 from PIL import Image, ImageFilter
 
 MIN_FRAMES = 6        # fewer frames => too few temporal bins for a reliable FFT
-WORK_RES = 128        # working resolution (square) for the temporal-frequency map
+
+# Working resolution (square) for the temporal-frequency map. Configurable for
+# experiments only; the DEFAULT STAYS 128 because the coherence-floor statistic
+# this scorer keys on is resolution-calibrated. Measured 2026-10-12 on the local
+# test clips: raising to 256 did NOT help and actively hurt - a real clip whose
+# p05 floor held at 0.51 (128) and 0.48 (192) COLLAPSED to 0.00 at 256, flipping
+# a real video into a full coherence-collapse false positive. Higher resolution
+# pulls in per-pixel sensor/compression noise that decorrelates the 5th-
+# percentile coherence. Do not raise the default without a real-reel corpus and
+# a noise/grain compensation step (see docs/detector-review-and-video-plan.md).
+WORK_RES = int(os.environ.get("TEMPORAL_RES", "128"))
 MEDIAN_K = 5          # median-filter kernel for the residual (paper: medianBlur 5)
 
 
@@ -452,7 +463,7 @@ def analyze_pixel_temporal_frequency(
         grays = _gray_stack(frames, res=res)                 # (T, H, W) float32
         # Motion compensation is only valid on a contiguous sequence (the
         # phase-correlation shifts must be a coherent per-frame drift).
-        aligned, motion = _motion_compensate(grays)          # cancel coherent camera motion
+        aligned, _motion = _motion_compensate(grays)         # cancel coherent camera motion
         stack = _residual_stack(aligned)
         spec = _temporal_spectrum_map(stack)                 # (K, H, W)
         stats = _spectrum_statistics(spec)
@@ -471,21 +482,15 @@ def analyze_pixel_temporal_frequency(
             )
 
         latency_ms = int((time.time() - t0) * 1000)
-        motion_note = (
-            f" (camera motion compensated: {motion['dx_per_frame']:.1f}px/frame "
-            f"x, {motion['dy_per_frame']:.1f}px/frame y)" if motion else ""
-        )
         reasons.insert(
             0,
             f"PwTF-DVD temporal-frequency scan ({len(frames)} frames, "
-            f"{spec.shape[0]} temporal bins @ {res}x{res}{motion_note}): {score}% "
+            f"{spec.shape[0]} temporal bins @ {res}x{res}): {score}% "
             f"synthetic confidence. Method: 1D FFT per pixel along time of the "
             f"median-filter residual (Kim et al., ICCV 2025). Latency: {latency_ms}ms.",
         )
 
         metrics = {k: round(v, 4) for k, v in stats.items()}
-        if motion:
-            metrics.update(motion)
         # Lag-1 residual autocorrelation is a scored signal (whiteness rule)
         # but was not surfaced; expose it so audits/regressions can review the
         # exact evidence the score was built from.

@@ -18,6 +18,7 @@ the real per-frame interval; without one the layer reports inactive instead of
 voting on garbage.
 """
 
+import os
 from typing import Dict, Any, List, Optional
 import numpy as np
 from PIL import Image
@@ -26,6 +27,13 @@ try:
     from forensics.frequency import analyze_frequency_domain
 except ImportError:  # pragma: no cover - direct module import layout
     from frequency import analyze_frequency_domain
+
+# Thumbnail resolution for the temporal stack. Configurable for experiments
+# only; the DEFAULT STAYS 128 because the jitter/variance thresholds below are
+# resolution-calibrated (measured 2026-10-12: raising resolution inflates the
+# per-pixel inter-frame variance with sensor/compression noise - see the same
+# finding documented in forensics/pwtf.py).
+_TEMPORAL_RES = int(os.environ.get("TEMPORAL_RES", "128"))
 
 
 def analyze_video_temporal_coherence(
@@ -81,8 +89,8 @@ def analyze_video_temporal_coherence(
         }
 
     try:
-        # Resize frames for efficient temporal matrix processing (e.g. 128x128)
-        thumb_size = (128, 128)
+        # Resize frames for efficient temporal matrix processing (default 128x128)
+        thumb_size = (_TEMPORAL_RES, _TEMPORAL_RES)
         gray_stack = []
 
         for f in frames:

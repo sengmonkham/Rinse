@@ -46,3 +46,7 @@ deploy/space_stage/*
 !deploy/space_stage/README.md
 !deploy/space_stage/requirements.txt
 !deploy/space_stage/packages.txt
+
+# Local manual detector test clips (not part of the repo)
+test videos/
+

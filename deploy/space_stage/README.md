@@ -35,6 +35,32 @@ video decoding).
 | pixel forensics | flat-render / document / collage signatures + fingerprint DB |
 | PwTF-DVD (ICCV 2025) | pixel-wise temporal frequency for video |
 
+The rPPG (remote photoplethysmography) heartbeat-consistency layer is
+included on the video path. It is face-gated (MediaPipe BlazeFace full-range),
+auto-detects whether a video frame contains a face, and is inactive
+(score None, contributes 0 to fusion) on non-face videos and images. It is
+confidence-weighted and fusion-only — never decisive alone — because modern
+high-quality fakes can synthesize a heartbeat (Seibold et al., Frontiers in
+Imaging 2025).
+
+Runtime dependency added: `mediapipe==1.1.0` in `requirements.txt`. The face
+model asset (`forensics/models/blaze_face_full_range.tflite`, ~1.08 MB) is
+bundled in the repo and ships inside the Space package via
+`scripts/build_space_package.py` (it is copied from `forensics/`). That model
+is NOT inside the mediapipe wheel — it must be present at
+`forensics/models/blaze_face_full_range.tflite` relative to this module, or the
+rPPG layer becomes inactive with a clear reason.
+
+Calibration caveat: the gating thresholds and the cardiac-band scoring in
+`forensics/rppg.py` are calibrated on a small internal face-video corpus. Do not
+quote any accuracy number (including the commonly-seen "96% rPPG" headline)
+until it is pinned to a specific detector/dataset/source. The 96%/NVIDIA figure
+is not cleanly attributable to a single NVIDIA detector in available sources;
+treat it as unconfirmed until sourced. Real dataset-specific numbers exist in the
+broader rPPG/face-forensics literature (FaceForensics++ papers report 91–99%
+depending on method and manipulation; a rounded ~96% AUC figure appears for
+other deepfake-detection methods).
+
 Calibrated behavior (see `tests/last_regression_results.json` in the repo):
 8/8 on the regression corpus; AI images that are flat renders / collages are
 caught as stills; photorealistic AI stills without page context read

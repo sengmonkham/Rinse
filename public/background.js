@@ -629,13 +629,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
       const raw = (settings.apiUrl || "http://localhost:5001").trim();
       const base = raw.replace(/\/predict(\/.*)?$/, "").replace(/\/+$/, "");
+      // Forward page context for AI-provenance metadata detection (caption,
+      // page title, URL) - matches the image scan context behavior.
+      const ctx = request.context && typeof request.context === "object" ? request.context : {};
+      const pickStr = (v, max) => (typeof v === "string" ? v.slice(0, max) : "");
+      const payload = { video_url: request.url };
+      if (pickStr(ctx.source_caption, 2000)) payload.source_caption = pickStr(ctx.source_caption, 2000);
+      if (pickStr(ctx.page_title, 200)) payload.page_title = pickStr(ctx.page_title, 200);
+      if (pickStr(ctx.page_url, 500)) payload.page_url = pickStr(ctx.page_url, 500);
+      if (pickStr(ctx.page_context, 1500)) payload.page_context = pickStr(ctx.page_context, 1500);
       fetch(`${base}/predict/video/deep`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...(settings.apiKey ? { "Authorization": `Bearer ${settings.apiKey}` } : {})
         },
-        body: JSON.stringify({ video_url: request.url })
+        body: JSON.stringify(payload)
       })
       .then(async (res) => {
         if (!res.ok) {

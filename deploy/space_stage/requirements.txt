@@ -21,9 +21,17 @@ scipy==1.18.1
 yt-dlp==2026.8.19
 detectzoo==0.1.4
 uvicorn
+mediapipe==1.1.0
+
+# rPPG face-gated pulse-consistency layer (forensics/rppg.py): MediaPipe
+# Tasks Vision face detector. Optional in the sense that rppg simply becomes
+# inactive when mediapipe is missing, but required for the rPPG layer to fire
+# on faced videos.
 
 # detectzoo import-time dependencies (core registry + audio/text/image
 # submodules import eagerly on `import detectzoo`)
+
+
 transformers==5.17.0
 timm==1.0.30
 open-clip-torch==3.3.0

@@ -74,6 +74,14 @@
       "source": "brave-proxy (brainrotcharacters.net, .webp)",
       "url": "https://imgs.search.brave.com/_DO9REk6x1lF1iwU6qKjSE_qJyDraOBWoCVlxoJ1GEI/rs:fit:860:0:0:0/g:ce/aHR0cHM6Ly9icmFp/bnJvdGNoYXJhY3Rl/cnMubmV0L3dwLWNv/bnRlbnQvdXBsb2Fk/cy9BbGwtSXRhbGlh/bi1CcmFpbnJvdC1D/aGFyYWN0ZXJzLVJv/c3Rlci03Njh4Mzg0/LndlYnA",
       "tier_expect": ["SYNTHETIC_AI", "SUSPICIOUS"]
+    },
+    {
+      "id": "ig-deipai-m0mj",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "url": "https://www.instagram.com/p/DeIpAi_M0mj/",
+      "tier_expect": ["SYNTHETIC_AI", "SUSPICIOUS"]
     }
   ]
 }

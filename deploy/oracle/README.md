@@ -50,6 +50,32 @@ bash provision_server.sh            # generates + prints a random API_KEY
 ```
 **Save the printed API_KEY.**
 
+### rPPG heartbeat layer (video path)
+
+`forensics/rppg.py` is a face-gated remote photoplethysmography layer that
+auto-detects whether a video frame contains a face (MediaPipe BlazeFace
+full-range) and is inactive (score None, contributes 0 to fusion) on non-face
+videos/images. It is confidence-weighted and fusion-only — never decisive
+alone — because modern high-quality fakes can synthesize a heartbeat
+(Seibold et al., Frontiers in Imaging 2025).
+
+Runtime dependency: `mediapipe==1.1.0` is listed in the repo root's
+`requirements-render.txt` (mirrored into `deploy/space_stage/requirements.txt`
+for the HF Space) and is installed as part of the normal `pip install -r
+requirements.txt` step on the VM in step 7. The face model asset
+(`forensics/models/blaze_face_full_range.tflite`, ~1.08 MB) is bundled in the
+repo and ships with the code rsynced to `/opt/rinse/app/forensics/models/` in
+step 6 — it is NOT inside the mediapipe wheel, so it must be present at that
+relative path or the rPPG layer becomes inactive with a clear reason.
+
+Calibration caveat: do not quote any accuracy number (including the commonly-
+seen "96% rPPG" headline) until it is pinned to a specific detector/dataset/
+source. The 96%/NVIDIA figure is not cleanly attributable to a single NVIDIA
+detector in available sources; treat it as unconfirmed until sourced. Real
+dataset-specific numbers exist in the broader rPPG/face-forensics literature
+(FaceForensics++ papers report 91–99% depending on method and manipulation; a
+rounded ~96% AUC figure appears for other deepfake-detection methods).
+
 ## 6. Install the service + proxy config
 Still on the VM:
 ```bash

@@ -7,9 +7,19 @@ only assert cache behavior, not verdict quality.
 """
 import io
 import json
+import os
 import sys
+import tempfile
 
 sys.path.insert(0, ".")
+
+# Run against an ISOLATED cache DB. This smoke test calls cache_clear() by
+# design ("fresh cache for deterministic counts"), which would otherwise WIPE
+# the real cache/scan_cache.db - including any deliberately forced verdicts.
+# forensics.scan_cache reads SCAN_CACHE_DIR at import time, so it must be set
+# before importing server.
+_ISOLATED_CACHE_DIR = tempfile.mkdtemp(prefix="rinse_smoke_cache_")
+os.environ["SCAN_CACHE_DIR"] = _ISOLATED_CACHE_DIR
 
 import server  # noqa: E402
 
@@ -30,7 +40,10 @@ def post_image(client, path, raw, **extra):
 
 
 def main():
-    # Fresh cache for deterministic counts.
+    # Fresh ISOLATED cache for deterministic counts (see SCAN_CACHE_DIR above).
+    assert server.scan_cache.CACHE_DIR == _ISOLATED_CACHE_DIR, (
+        "smoke test is not isolated; refusing to touch the real cache"
+    )
     server.scan_cache.cache_clear()
 
     c = server.app.test_client()

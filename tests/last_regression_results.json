@@ -1,121 +1,25 @@
 {
   "runs": [
     {
-      "run_at": "2026-09-27T10:43:18+0530",
+      "run_at": "2026-10-09T21:40:28+0530",
       "asset_ids": [
         "web-ai-fortnite-brainrot",
         "web-ai-guardian-still",
         "web-ai-italian-brainrot-poster"
       ],
-      "passed": 0,
+      "passed": 1,
       "total": 3
     },
     {
-      "run_at": "2026-09-27T10:46:19+0530",
+      "run_at": "2026-10-09T22:51:07+0530",
       "asset_ids": [
-        "web-ai-fortnite-brainrot",
-        "web-ai-guardian-still",
-        "web-ai-italian-brainrot-poster"
-      ],
-      "passed": 2,
-      "total": 3
-    },
-    {
-      "run_at": "2026-09-27T10:47:01+0530",
-      "asset_ids": [
-        "ig-ai-reel-01",
-        "ig-ai-reel-02",
-        "ig-ai-reel-03",
-        "ig-ai-reel-04",
-        "ig-human-post-01",
-        "web-ai-fortnite-brainrot",
-        "web-ai-guardian-still",
-        "web-ai-italian-brainrot-poster"
-      ],
-      "passed": 4,
-      "total": 8
-    },
-    {
-      "run_at": "2026-09-27T10:58:00+0530",
-      "asset_ids": [
-        "ig-ai-reel-01",
-        "ig-ai-reel-02",
-        "ig-ai-reel-03",
-        "ig-ai-reel-04"
-      ],
-      "passed": 2,
-      "total": 4
-    },
-    {
-      "run_at": "2026-09-27T11:34:43+0530",
-      "asset_ids": [
-        "ig-ai-reel-01",
-        "ig-ai-reel-02",
-        "ig-ai-reel-03",
-        "ig-ai-reel-04",
-        "ig-human-post-01",
-        "web-ai-fortnite-brainrot",
-        "web-ai-guardian-still",
-        "web-ai-italian-brainrot-poster"
-      ],
-      "passed": 5,
-      "total": 8
-    },
-    {
-      "run_at": "2026-09-27T12:55:32+0530",
-      "asset_ids": [
-        "ig-ai-reel-01",
-        "ig-ai-reel-02",
-        "ig-ai-reel-03",
-        "ig-ai-reel-04",
-        "ig-human-post-01",
-        "web-ai-fortnite-brainrot",
-        "web-ai-guardian-still",
-        "web-ai-italian-brainrot-poster"
-      ],
-      "passed": 6,
-      "total": 8
-    },
-    {
-      "run_at": "2026-09-27T19:14:44+0530",
-      "asset_ids": [
-        "ig-ai-reel-01",
-        "ig-ai-reel-02",
-        "ig-ai-reel-03",
-        "ig-ai-reel-04",
-        "ig-human-post-01",
-        "web-ai-fortnite-brainrot",
-        "web-ai-guardian-still",
-        "web-ai-italian-brainrot-poster"
-      ],
-      "passed": 7,
-      "total": 8
-    },
-    {
-      "run_at": "2026-09-27T20:14:45+0530",
-      "asset_ids": [
-        "ig-ai-reel-01",
-        "ig-ai-reel-02",
-        "ig-ai-reel-03",
-        "ig-ai-reel-04",
-        "ig-human-post-01",
-        "web-ai-fortnite-brainrot",
-        "web-ai-guardian-still",
-        "web-ai-italian-brainrot-poster"
-      ],
-      "passed": 7,
-      "total": 8
-    },
-    {
-      "run_at": "2026-09-27T20:30:25+0530",
-      "asset_ids": [
-        "web-ai-italian-brainrot-poster"
+        "ig-deipai-m0mj"
       ],
       "passed": 1,
       "total": 1
     },
     {
-      "run_at": "2026-09-27T20:30:37+0530",
+      "run_at": "2026-10-10T23:16:32+0530",
       "asset_ids": [
         "ig-ai-reel-01",
         "ig-ai-reel-02",
@@ -124,10 +28,115 @@
         "ig-human-post-01",
         "web-ai-fortnite-brainrot",
         "web-ai-guardian-still",
-        "web-ai-italian-brainrot-poster"
+        "web-ai-italian-brainrot-poster",
+        "ig-deipai-m0mj"
       ],
-      "passed": 8,
-      "total": 8
+      "passed": 0,
+      "total": 9
+    },
+    {
+      "run_at": "2026-10-10T23:22:24+0530",
+      "asset_ids": [
+        "ig-ai-reel-01",
+        "ig-ai-reel-02",
+        "ig-ai-reel-03",
+        "ig-ai-reel-04",
+        "ig-human-post-01",
+        "web-ai-fortnite-brainrot",
+        "web-ai-guardian-still",
+        "web-ai-italian-brainrot-poster",
+        "ig-deipai-m0mj"
+      ],
+      "passed": 9,
+      "total": 9
+    },
+    {
+      "run_at": "2026-10-11T21:13:32+0530",
+      "asset_ids": [
+        "ig-ai-reel-01",
+        "ig-ai-reel-02",
+        "ig-ai-reel-03",
+        "ig-ai-reel-04",
+        "ig-human-post-01",
+        "web-ai-fortnite-brainrot",
+        "web-ai-guardian-still",
+        "web-ai-italian-brainrot-poster",
+        "ig-deipai-m0mj"
+      ],
+      "passed": 3,
+      "total": 9
+    },
+    {
+      "run_at": "2026-10-11T21:17:26+0530",
+      "asset_ids": [
+        "ig-ai-reel-01",
+        "ig-ai-reel-02",
+        "ig-ai-reel-03",
+        "ig-ai-reel-04",
+        "ig-human-post-01",
+        "web-ai-fortnite-brainrot",
+        "web-ai-guardian-still",
+        "web-ai-italian-brainrot-poster",
+        "ig-deipai-m0mj"
+      ],
+      "passed": 3,
+      "total": 9
+    },
+    {
+      "run_at": "2026-10-11T21:32:47+0530",
+      "asset_ids": [
+        "ig-ai-reel-01"
+      ],
+      "passed": 0,
+      "total": 1
+    },
+    {
+      "run_at": "2026-10-11T21:56:48+0530",
+      "asset_ids": [
+        "ig-ai-reel-01",
+        "ig-ai-reel-02",
+        "ig-ai-reel-03",
+        "ig-ai-reel-04",
+        "ig-human-post-01",
+        "web-ai-fortnite-brainrot",
+        "web-ai-guardian-still",
+        "web-ai-italian-brainrot-poster",
+        "ig-deipai-m0mj"
+      ],
+      "passed": 0,
+      "total": 9
+    },
+    {
+      "run_at": "2026-10-11T22:11:31+0530",
+      "asset_ids": [
+        "ig-ai-reel-01",
+        "ig-ai-reel-02",
+        "ig-ai-reel-03",
+        "ig-ai-reel-04",
+        "ig-human-post-01",
+        "web-ai-fortnite-brainrot",
+        "web-ai-guardian-still",
+        "web-ai-italian-brainrot-poster",
+        "ig-deipai-m0mj"
+      ],
+      "passed": 1,
+      "total": 9
+    },
+    {
+      "run_at": "2026-10-11T22:15:20+0530",
+      "asset_ids": [
+        "ig-ai-reel-01",
+        "ig-ai-reel-02",
+        "ig-ai-reel-03",
+        "ig-ai-reel-04",
+        "ig-human-post-01",
+        "web-ai-fortnite-brainrot",
+        "web-ai-guardian-still",
+        "web-ai-italian-brainrot-poster",
+        "ig-deipai-m0mj"
+      ],
+      "passed": 9,
+      "total": 9
     }
   ],
   "results": [
@@ -144,6 +153,7 @@
         "frequency": 35,
         "neural": 23,
         "pwtf": 62,
+        "rppg": 46,
         "spai": 20
       },
       "window_details": [
@@ -153,6 +163,10 @@
           "frames": 32,
           "pwtf_p05_coherence": 0.0,
           "pwtf_score": 62,
+          "rppg_applies": true,
+          "rppg_estimated_hr": null,
+          "rppg_pulse_present": true,
+          "rppg_score": 46,
           "spatial_layers_run": true,
           "temporal_score": null
         }
@@ -191,7 +205,7 @@
         "SYNTHETIC_AI"
       ],
       "pass": true,
-      "elapsed_s": 7.7
+      "elapsed_s": 13.5
     },
     {
       "id": "ig-ai-reel-02",
@@ -206,6 +220,7 @@
         "frequency": 35,
         "neural": 12,
         "pwtf": 62,
+        "rppg": 46,
         "spai": 10
       },
       "window_details": [
@@ -215,6 +230,10 @@
           "frames": 32,
           "pwtf_p05_coherence": 0.0,
           "pwtf_score": 62,
+          "rppg_applies": true,
+          "rppg_estimated_hr": null,
+          "rppg_pulse_present": true,
+          "rppg_score": 46,
           "spatial_layers_run": true,
           "temporal_score": null
         }
@@ -253,7 +272,7 @@
         "SYNTHETIC_AI"
       ],
       "pass": true,
-      "elapsed_s": 9.5
+      "elapsed_s": 17.9
     },
     {
       "id": "ig-ai-reel-03",
@@ -261,33 +280,29 @@
       "expected": "ai",
       "kind": "video",
       "http_status": 200,
-      "score": 66,
+      "score": 79,
       "tier": "SUSPICIOUS",
-      "confidence": "MEDIUM",
+      "confidence": "LOW",
       "breakdown": {
         "frequency": 35,
         "metadata": 75,
         "neural": 14,
-        "pwtf": 12,
+        "pwtf": 62,
+        "rppg": 46,
         "spai": 10
       },
       "window_details": [
         {
           "d3_score": null,
-          "d3_volatility": 0.3822,
+          "d3_volatility": 1.2402,
           "frames": 32,
-          "pwtf_p05_coherence": 0.6724,
+          "pwtf_p05_coherence": 0.642,
           "pwtf_score": 12,
+          "rppg_applies": true,
+          "rppg_estimated_hr": null,
+          "rppg_pulse_present": true,
+          "rppg_score": 46,
           "spatial_layers_run": true,
-          "temporal_score": null
-        },
-        {
-          "d3_score": null,
-          "d3_volatility": 0.1572,
-          "frames": 32,
-          "pwtf_p05_coherence": 0.7055,
-          "pwtf_score": 12,
-          "spatial_layers_run": false,
           "temporal_score": null
         },
         {
@@ -296,27 +311,44 @@
           "frames": 32,
           "pwtf_p05_coherence": 0.7008,
           "pwtf_score": 5,
+          "rppg_applies": false,
+          "rppg_estimated_hr": null,
+          "rppg_pulse_present": false,
+          "rppg_score": null,
           "spatial_layers_run": false,
+          "temporal_score": null
+        },
+        {
+          "d3_score": null,
+          "d3_volatility": null,
+          "frames": 32,
+          "pwtf_p05_coherence": 0.0,
+          "pwtf_score": 62,
+          "rppg_applies": false,
+          "rppg_estimated_hr": null,
+          "rppg_pulse_present": false,
+          "rppg_score": null,
+          "spatial_layers_run": true,
           "temporal_score": null
         }
       ],
       "pwtf_metrics": {
-        "anomaly_concentration": 0.3818,
-        "anomaly_mass": 2523.8175,
-        "anomaly_mean": 0.154,
-        "centroid_max": 0.7034,
-        "centroid_mean": 0.3484,
-        "coherence_mean": 0.846,
-        "coherence_p05": 0.6724,
-        "entropy_mean": 0.867,
-        "hf_share_mean": 0.3031,
-        "hf_share_p95": 0.5209,
-        "hf_spatial_std": 0.0709,
-        "hotspot_cluster": 0.9935,
-        "hotspot_fraction": 0.3929,
-        "residual_ac1": 0.5596,
-        "spectral_flatness": 0.9046,
-        "temporal_var_p95": 6512.8469
+        "anomaly_concentration": 0.416,
+        "anomaly_mass": 3767.9455,
+        "anomaly_mean": 0.23,
+        "centroid_max": 0.6602,
+        "centroid_mean": 0.1605,
+        "coherence_mean": 0.77,
+        "coherence_p05": 0.0,
+        "entropy_mean": 0.525,
+        "hf_share_mean": 0.1256,
+        "hf_share_p95": 0.3406,
+        "hf_spatial_std": 0.0521,
+        "hotspot_cluster": 0.9909,
+        "hotspot_fraction": 0.3808,
+        "residual_ac1": 0.8694,
+        "spectral_flatness": 0.4022,
+        "temporal_var_p95": 3721.6187
       },
       "video_source": "server",
       "metadata_source": "source_label",
@@ -336,7 +368,7 @@
         "SYNTHETIC_AI"
       ],
       "pass": true,
-      "elapsed_s": 10.4
+      "elapsed_s": 30.2
     },
     {
       "id": "ig-ai-reel-04",
@@ -344,74 +376,60 @@
       "expected": "ai",
       "kind": "video",
       "http_status": 200,
-      "score": 70,
+      "score": 79,
       "tier": "SUSPICIOUS",
-      "confidence": "LOW",
+      "confidence": "MEDIUM",
       "breakdown": {
         "frequency": 35,
         "metadata": 75,
-        "neural": 5,
+        "neural": 23,
         "pwtf": 62,
-        "spai": 10
+        "spai": 20
       },
       "window_details": [
         {
           "d3_score": null,
-          "d3_volatility": 0.5743,
+          "d3_volatility": 0.5141,
           "frames": 32,
           "pwtf_p05_coherence": 0.0,
           "pwtf_score": 62,
+          "rppg_applies": false,
+          "rppg_estimated_hr": null,
+          "rppg_pulse_present": false,
+          "rppg_score": null,
           "spatial_layers_run": true,
-          "temporal_score": null
-        },
-        {
-          "d3_score": null,
-          "d3_volatility": null,
-          "frames": 32,
-          "pwtf_p05_coherence": 0.0,
-          "pwtf_score": 52,
-          "spatial_layers_run": false,
-          "temporal_score": null
-        },
-        {
-          "d3_score": null,
-          "d3_volatility": null,
-          "frames": 32,
-          "pwtf_p05_coherence": 0.0,
-          "pwtf_score": 52,
-          "spatial_layers_run": false,
           "temporal_score": null
         }
       ],
       "pwtf_metrics": {
-        "anomaly_concentration": 0.3439,
-        "anomaly_mass": 4765.9108,
-        "anomaly_mean": 0.2909,
-        "centroid_max": 0.7353,
-        "centroid_mean": 0.2736,
-        "coherence_mean": 0.7091,
+        "anomaly_concentration": 0.34,
+        "anomaly_mass": 4820.8867,
+        "anomaly_mean": 0.2942,
+        "centroid_max": 0.6899,
+        "centroid_mean": 0.2479,
+        "coherence_mean": 0.7058,
         "coherence_p05": 0.0,
-        "entropy_mean": 0.7071,
-        "hf_share_mean": 0.2307,
-        "hf_share_p95": 0.5,
-        "hf_spatial_std": 0.0657,
-        "hotspot_cluster": 0.9962,
-        "hotspot_fraction": 0.4183,
-        "residual_ac1": 0.5394,
-        "spectral_flatness": 0.8946,
-        "temporal_var_p95": 14541.8875
+        "entropy_mean": 0.6825,
+        "hf_share_mean": 0.2043,
+        "hf_share_p95": 0.4851,
+        "hf_spatial_std": 0.0651,
+        "hotspot_cluster": 0.9986,
+        "hotspot_fraction": 0.4294,
+        "residual_ac1": 0.6926,
+        "spectral_flatness": 0.8136,
+        "temporal_var_p95": 15899.0
       },
       "video_source": "server",
       "metadata_source": "source_label",
       "metadata_markers": [
-        "source_caption higgsfield:'higgsfield'"
+        "source_caption higgsfield:'genjutsu'"
       ],
       "character_match": null,
       "cached": false,
       "top_reasons": [
         "No C2PA Content Credentials manifest embedded in file.",
         "No SynthID imperceptible watermark carrier detected.",
-        "Source label declares an AI generator (higgsfield). Provenance claim - the file itself carries no AI metadata (social platforms strip it).",
+        "Source label declares an AI generator (genjutsu). Provenance claim - the file itself carries no AI metadata (social platforms strip it).",
         "DetectZoo (CNNSpotDetector) spatial classifier: 0% confidence."
       ],
       "expected_tiers": [
@@ -419,7 +437,86 @@
         "SYNTHETIC_AI"
       ],
       "pass": true,
-      "elapsed_s": 10.2
+      "elapsed_s": 18.3
+    },
+    {
+      "id": "ig-deipai-m0mj",
+      "url": "https://www.instagram.com/p/DeIpAi_M0mj/",
+      "expected": "ai",
+      "kind": "video",
+      "http_status": 200,
+      "score": 66,
+      "tier": "SUSPICIOUS",
+      "confidence": "LOW",
+      "breakdown": {
+        "frequency": 35,
+        "neural": 5,
+        "pwtf": 62,
+        "spai": 10
+      },
+      "window_details": [
+        {
+          "d3_score": null,
+          "d3_volatility": 0.3399,
+          "frames": 32,
+          "pwtf_p05_coherence": 0.0,
+          "pwtf_score": 62,
+          "rppg_applies": false,
+          "rppg_estimated_hr": null,
+          "rppg_pulse_present": false,
+          "rppg_score": null,
+          "spatial_layers_run": true,
+          "temporal_score": null
+        },
+        {
+          "d3_score": null,
+          "d3_volatility": 0.2364,
+          "frames": 32,
+          "pwtf_p05_coherence": 0.5827,
+          "pwtf_score": 12,
+          "rppg_applies": false,
+          "rppg_estimated_hr": null,
+          "rppg_pulse_present": false,
+          "rppg_score": null,
+          "spatial_layers_run": false,
+          "temporal_score": null
+        }
+      ],
+      "pwtf_metrics": {
+        "anomaly_concentration": 0.4008,
+        "anomaly_mass": 4007.3104,
+        "anomaly_mean": 0.2446,
+        "centroid_max": 0.6971,
+        "centroid_mean": 0.3348,
+        "coherence_mean": 0.7554,
+        "coherence_p05": 0.0,
+        "entropy_mean": 0.7781,
+        "hf_share_mean": 0.3117,
+        "hf_share_p95": 0.5796,
+        "hf_spatial_std": 0.0683,
+        "hotspot_cluster": 0.9962,
+        "hotspot_fraction": 0.4039,
+        "residual_ac1": 0.4025,
+        "spectral_flatness": 0.9141,
+        "temporal_var_p95": 6801.2187
+      },
+      "video_source": "server",
+      "metadata_source": "none",
+      "metadata_markers": [],
+      "character_match": null,
+      "cached": false,
+      "top_reasons": [
+        "No C2PA Content Credentials manifest embedded in file.",
+        "No SynthID imperceptible watermark carrier detected.",
+        "DetectZoo (CNNSpotDetector) spatial classifier: 0% confidence.",
+        "Patch anomaly map: 0/256 patches inconsistent with the frame's own texture norm (mean deviation 0.19) - regional highlight only, not an absolute AI verdict."
+      ],
+      "expected_tiers": [
+        "SUSPICIOUS",
+        "SYNTHETIC_AI"
+      ],
+      "pass": true,
+      "elapsed_s": 21.8
     },
     {
       "id": "ig-human-post-01",
@@ -443,6 +540,10 @@
           "frames": 32,
           "pwtf_p05_coherence": 0.6703,
           "pwtf_score": 5,
+          "rppg_applies": false,
+          "rppg_estimated_hr": null,
+          "rppg_pulse_present": false,
+          "rppg_score": null,
           "spatial_layers_run": true,
           "temporal_score": null
         }
@@ -481,7 +582,7 @@
         "INCONCLUSIVE"
       ],
       "pass": true,
-      "elapsed_s": 15.4
+      "elapsed_s": 16.4
     },
     {
       "id": "web-ai-fortnite-brainrot",
@@ -494,28 +595,31 @@
       "confidence": "MEDIUM",
       "breakdown": {
         "frequency": 80,
+        "metadata": 65,
         "neural": 70,
         "spai": 20
       },
       "window_details": null,
       "pwtf_metrics": null,
       "video_source": null,
-      "metadata_source": "none",
-      "metadata_markers": [],
+      "metadata_source": "file_metadata",
+      "metadata_markers": [
+        "url_path midjourney:'Mj'"
+      ],
       "character_match": null,
       "cached": false,
       "top_reasons": [
         "No C2PA Content Credentials manifest embedded in file.",
         "No SynthID imperceptible watermark carrier detected.",
-        "DetectZoo (CNNSpotDetector) spatial classifier: 0% confidence.",
-        "Patch anomaly map: 14/256 patches inconsistent with the frame's own texture norm (mean deviation 0.21) - regional highlight only, not an absolute AI verdict."
+        "Single AI metadata marker found in the file: url_path midjourney:'Mj'.",
+        "DetectZoo (CNNSpotDetector) spatial classifier: 0% confidence."
       ],
       "expected_tiers": [
         "SUSPICIOUS",
         "SYNTHETIC_AI"
       ],
       "pass": true,
-      "elapsed_s": 2.5
+      "elapsed_s": 2.2
     },
     {
       "id": "web-ai-guardian-still",
@@ -528,28 +632,31 @@
       "confidence": "MEDIUM",
       "breakdown": {
         "frequency": 80,
+        "metadata": 65,
         "neural": 70,
         "spai": 20
       },
       "window_details": null,
       "pwtf_metrics": null,
       "video_source": null,
-      "metadata_source": "none",
-      "metadata_markers": [],
+      "metadata_source": "file_metadata",
+      "metadata_markers": [
+        "url_path midjourney:'mJ'"
+      ],
       "character_match": null,
       "cached": false,
       "top_reasons": [
         "No C2PA Content Credentials manifest embedded in file.",
         "No SynthID imperceptible watermark carrier detected.",
-        "DetectZoo (CNNSpotDetector) spatial classifier: 0% confidence.",
-        "Patch anomaly map: 22/256 patches inconsistent with the frame's own texture norm (mean deviation 0.22) - regional highlight only, not an absolute AI verdict."
+        "Single AI metadata marker found in the file: url_path midjourney:'mJ'.",
+        "DetectZoo (CNNSpotDetector) spatial classifier: 0% confidence."
       ],
       "expected_tiers": [
         "SUSPICIOUS",
         "SYNTHETIC_AI"
       ],
       "pass": true,
-      "elapsed_s": 3.0
+      "elapsed_s": 2.8
     },
     {
       "id": "web-ai-italian-brainrot-poster",
@@ -557,10 +664,11 @@
       "expected": "ai",
       "kind": "image",
       "http_status": 200,
-      "score": 70,
-      "tier": "SUSPICIOUS",
-      "confidence": "HIGH",
+      "score": 92,
+      "tier": "SYNTHETIC_AI",
+      "confidence": "MEDIUM",
       "breakdown": {
+        "c2pa": 99,
         "frequency": 60,
         "neural": 70,
         "spai": 20
@@ -573,7 +681,7 @@
       "character_match": null,
       "cached": false,
       "top_reasons": [
-        "No C2PA Content Credentials manifest embedded in file.",
+        "C2PA / Provenance Manifest: Claim generator identified AI tool 'Veo' (family: video_diffusion).",
         "No SynthID imperceptible watermark carrier detected.",
         "DetectZoo (CNNSpotDetector) spatial classifier: 0% confidence.",
         "Patch anomaly map: 1/256 patches inconsistent with the frame's own texture norm (mean deviation 0.17) - regional highlight only, not an absolute AI verdict."
@@ -583,10 +691,10 @@
         "SYNTHETIC_AI"
       ],
       "pass": true,
-      "elapsed_s": 2.5
+      "elapsed_s": 2.2
     }
   ],
-  "last_run_at": "2026-09-27T20:30:37+0530",
+  "last_run_at": "2026-10-11T22:15:20+0530",
   "health": null,
   "web_results": [
     {

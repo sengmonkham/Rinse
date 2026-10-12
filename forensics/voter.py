@@ -5,7 +5,298 @@ Fuses outputs from all 5 forensic layers, handles hard overrides for verified
 watermarks / manifests, and calculates confidence tiers and forensic explanations.
 """
 
+import os
 from typing import Dict, Any, List, Optional
+
+# --- Temporal-residual vote (plan P1, docs/detector-review-and-video-plan.md) ---
+# The temporal-residual probe (forensics/temporal_residual.py) is a full-res
+# neighbor-mean prediction residual. Measured 2026-10-12: it fires (score 62)
+# on two self-consistent AI clips that pwtf's coherence-collapse rule entirely
+# misses, and stays silent (score None) on every real clip in the sample
+# (residual white-fraction 0.47-0.93 AI vs 0.03-0.10 real). It is promoted from
+# metrics-only to a GUARDED vote: it contributes to the weighted average and can
+# lift a clip into the SUSPICIOUS band, but temporal-only evidence can never
+# reach SYNTHETIC_AI (cap 79 below). Set TR_VOTE=0 to disable entirely while the
+# expanded real-reel corpus validates the thresholds.
+TR_VOTE = os.environ.get("TR_VOTE", "1") not in ("0", "false", "no")
+
+# Video STRICT mode: bias hard toward recall (catch every AI clip) at the cost
+# of false positives on real video. Adds two escalation paths that fire on
+# weak-but-real temporal anomalies:
+#   (a) WHITENESS: semi-independent per-frame synthesis leaves temporally white
+#       residuals (high flatness + low lag-1 autocorrelation). A real clip in
+#       the calibration sample read flat 0.615 / ac1 0.81 (silent).
+#   (b) a LOWER pwtf gate (>= 45 instead of >= 60) when the coherence floor is
+#       only mildly weakened (p05 < 0.35).
+#   plus an ANTI-FALSE-AUTHENTIC floor: a video with any elevated temporal
+#   reading is never returned as confident AUTHENTIC_HUMAN - it is at least
+#   INCONCLUSIVE. This converts "missed AI" into "needs review".
+# Default ON (strict). Set VIDEO_STRICT=0 to restore the calibrated behavior.
+# See docs/detector-review-and-video-plan.md section 7.
+VIDEO_STRICT = os.environ.get("VIDEO_STRICT", "1") not in ("0", "false", "no")
+
+
+def _local_inconsistency_score(
+    pwtf_metrics: Optional[Dict[str, float]],
+    neural_submodels: Optional[Dict[str, Any]],
+    pf_hits: Optional[List[str]],
+    d3_metrics: Optional[Dict[str, float]],
+) -> "tuple[int, List[str], Dict[str, Any]]":
+    """
+    Evidence for LOCALIZED alteration / regeneration in a clip.
+
+    This is the axis you asked for when you want the output to be able to say
+    'altered' rather than only 'suspicious': it scores evidence that SOME PART
+    of the media is inconsistent with the rest of the same media, not that the
+    whole thing is globally synthetic.
+
+    Inputs:
+      pwtf_metrics: PwTF-DVD spectrum stats from the strongest pwtf window.
+      neural_submodels: neural layer submodel dict (contains vit_patch etc. when available).
+      pf_hits: perceptual fingerprint hits on video frames.
+      d3_metrics: D3 second-order metrics (metrics-only layer; not scored here).
+
+    Returns (score 0-100, reasons, detail).
+    """
+    reasons: List[str] = []
+    detail: Dict[str, Any] = {}
+
+    score = 12
+    pf_hit = bool(pf_hits)
+    if pf_hit:
+        score = max(score, 88)
+        reasons.append(
+            "Known AI-generated artwork / character fingerprint matched on a video "
+            "frame - the same pixels appear in a recognized generated asset, which is "
+            "localized provenance evidence that at least part of this media is altered "
+            "from its original capture."
+        )
+        detail["pf_hit"] = True
+
+    vit = None
+    if neural_submodels:
+        vit = neural_submodels.get("vit_patch")
+
+    pwtf = pwtf_metrics or {}
+    p05 = float(pwtf.get("coherence_p05", 1.0))
+    conc = float(pwtf.get("anomaly_concentration", 0.0))
+    hotspot = float(pwtf.get("hotspot_fraction", 0.0))
+    cluster = float(pwtf.get("hotspot_cluster", 0.0))
+    hotspot_mass = float(pwtf.get("anomaly_mass", 0.0))
+    hf_mean = float(pwtf.get("hf_share_mean", 0.0))
+    hf_p95 = float(pwtf.get("hf_share_p95", 0.0))
+    flat = float(pwtf.get("spectral_flatness", 0.0))
+    ac1 = float(pwtf.get("residual_ac1", 0.0))
+    temporal_var_p95 = float(pwtf.get("temporal_var_p95", 0.0))
+
+    detail.update({
+        "coherence_p05": round(p05, 4),
+        "anomaly_concentration": round(conc, 4),
+        "hotspot_fraction": round(hotspot, 4),
+        "hotspot_cluster": round(cluster, 4),
+        "anomaly_mass": round(hotspot_mass, 3),
+        "hf_share_mean": round(hf_mean, 4),
+        "hf_share_p95": round(hf_p95, 4),
+        "spectral_flatness": round(flat, 4),
+        "residual_ac1": round(ac1, 4),
+        "temporal_var_p95": round(temporal_var_p95, 3),
+        "vit_patch_score": vit,
+        "vit_anomalous_patches": (neural_submodels or {}).get("synthetic_patches_count"),
+    })
+
+    localized = False
+
+    # 1. Coherence-floor collapse with localized anomaly concentration.
+    #    The paper's core localized-regeneration signature is: a minority of
+    #    pixels do not share the scene's temporal model (p05 collapse) AND the
+    #    anomaly mass concentrates in a compact cluster rather than scattering
+    #    like diffuse camera noise. Both conditions together are the strongest
+    #    available 'this region was regenerated / edited' signal on this stack.
+    if p05 < 0.25 and conc >= 0.20 and cluster >= 0.70:
+        localized = True
+        score = max(score, 72)
+        reasons.append(
+            f"Localized temporal-regeneration signature: the least-coherent 5% of "
+            f"pixels do not share the scene's temporal model (p05 coherence "
+            f"{p05:.2f}) and the anomaly mass is concentrated in a compact cluster "
+            f"(concentration {conc:.2f}, cluster {cluster:.2f}) - consistent with a "
+            f"regenerated or edited region rather than uniform camera noise."
+        )
+
+    # 2. Strong hotspot cluster even without full collapse.
+    #    A compact cluster of extreme temporal-variance pixels is still evidence
+    #    of a localized artifact even when the coherence floor is only weakened.
+    #    This is deliberately weaker than the collapse rule to avoid flagging
+    #    ordinary fast motion as 'altered'. Keep it gated on a weak floor as well,
+    #    because the regression set shows high-hotspot real footage (p05 0.67,
+    #    hotspot 0.31, anomaly_concentration 0.24) must not reach 'likely altered'.
+    if not localized and p05 < 0.40 and hotspot >= 0.12 and cluster >= 0.75 and conc >= 0.15:
+        localized = True
+        score = max(score, 60)
+        reasons.append(
+            f"Localized temporal-variance hotspot cluster: {hotspot * 100:.1f}% of "
+            f"pixels show extreme temporal variance in a compact cluster "
+            f"(cluster {cluster:.2f}, anomaly concentration {conc:.2f}), with a "
+            f"weakened coherence floor (p05 {p05:.2f}). This can indicate a "
+            f"localized artifact, but on its own it is not conclusive because fast "
+            f"real motion can also produce hotspots."
+        )
+
+    # 3. Very high anomaly mass / concentration without collapse is still worth
+    #    surfacing as 'possible localized artifact', but not as a strong vote.
+    if not localized and conc >= 0.25 and hotspot_mass > 4000.0 and p05 < 0.50:
+        score = max(score, 45)
+        reasons.append(
+            f"Elevated localized temporal anomaly: anomaly concentration "
+            f"{conc:.2f} with total anomaly mass {hotspot_mass:.0f} and a weakened "
+            f"coherence floor (p05 {p05:.2f}) - a minority of pixels deviate "
+            f"strongly from the scene's temporal model."
+        )
+
+    # 4. Whiteness-only signals (flat spectrum + low residual autocorrelation)
+    #    are GLOBAL generation-style evidence. They do NOT by themselves mean the
+    #    clip is 'altered' in the sense of a localized edit, so they do not raise
+    #    this axis much. They are routed to the ai_artifact axis instead.
+    if flat >= 0.85 and ac1 <= 0.20:
+        reasons.append(
+            f"Temporal residuals are spectrally white (flatness {flat:.2f}, lag-1 "
+            f"autocorrelation {ac1:.2f}) - consistent with temporally independent "
+            f"noise across pixels rather than physical motion persistence."
+        )
+        if not localized:
+            score = max(score, 35)
+
+    return score, reasons, detail
+
+
+def _ai_artifact_score(
+    layers: Dict[str, Optional[int]],
+    layer_reasons: Dict[str, List[str]],
+    pwtf_metrics: Optional[Dict[str, float]],
+    d3_metrics: Optional[Dict[str, float]],
+    pf_hits: Optional[List[str]],
+    pf_strong: bool,
+    character_match: Optional[Any],
+    is_video: bool,
+) -> "tuple[int, List[str], Dict[str, Any]]":
+    """
+    Evidence that the media contains AI-generation-style artifacts, globally or
+    in a way that does NOT cleanly correspond to a single localized edit.
+
+    This is the 'has AI artifacts' axis. It can be high even when the 'altered'
+    axis is low - e.g. a synthetic clip with no clean localized edit signature,
+    or a clip with diffuse generative texture but no obvious spliced region.
+
+    Returns (score 0-100, reasons, detail).
+    """
+    reasons: List[str] = []
+    detail: Dict[str, Any] = {}
+
+    synthid = layers.get("synthid")
+    c2pa = layers.get("c2pa")
+    metadata = layers.get("metadata")
+    frequency = layers.get("frequency")
+    neural = layers.get("neural")
+    spai = layers.get("spai")
+    pwtf = layers.get("pwtf")
+    temporal = layers.get("temporal")
+
+    pf_hit = bool(pf_hits)
+    if pf_hit:
+        detail["pf_hit"] = True
+
+    if character_match:
+        detail["character_match"] = bool(character_match)
+
+    score = 12
+    strong_spatial = {
+        k: v for k, v in layers.items()
+        if k in ("c2pa", "synthid", "metadata", "neural", "frequency", "spai") and v is not None and v >= 70
+    }
+    strong_count = len(strong_spatial)
+
+    # 1. Provenance claims that name a generator are NOT localized pixel evidence,
+    #    but they are still AI-artifact-relevant provenance. Keep them out of the
+    #    'altered' axis and into this axis with honest wording.
+    provenance_reasons: List[str] = []
+    if metadata is not None and metadata >= 70:
+        provenance_reasons.append(
+            f"AI-provenance metadata / source label indicates a generator tool "
+            f"(metadata score {metadata}); this is provenance about origin, not a "
+            f"pixel-level proof that this specific clip has visible AI artifacts."
+        )
+    if c2pa is not None and 10 <= c2pa <= 80:
+        provenance_reasons.append(
+            "C2PA Content Credentials are present and indicate a non-camera provenance "
+            "claim; C2PA is evidence about the file's declared origin, not a detector "
+            "of visible artifacts in the decoded pixels."
+        )
+    if provenance_reasons:
+        reasons.extend(provenance_reasons)
+        score = max(score, 55 if strong_count else 40)
+        detail["provenance_present"] = True
+
+    # 2. Strong global forensic signals are good AI-artifact evidence.
+    if synthid is not None and synthid >= 90:
+        detail["synthid_hard"] = True
+        score = max(score, 95)
+        reasons.append(
+            "Imperceptible SynthID watermark carrier detected - strong evidence that "
+            "this media was produced or touched by a watermarked generative system."
+        )
+    elif frequency is not None and frequency >= 75:
+        score = max(score, 75)
+        reasons.append(
+            "Frequency-domain forensics returned a strong synthetic signature - "
+            "consistent with generator-style spectral artifacts."
+        )
+    elif neural is not None and neural >= 75:
+        score = max(score, 75)
+        reasons.append(
+            "Neural classifier ensemble returned a strong synthetic-confidence reading "
+            "- consistent with AI-generated imagery."
+        )
+    elif spai is not None and spai >= 70:
+        score = max(score, 70)
+        reasons.append(
+            "SPAI spectral analysis returned a strong synthetic reading - consistent "
+            "with generator-style spectral artifacts."
+        )
+
+    # 3. Temporal family signals are global generation-style evidence when they
+    #    survive calibration. Keep them lower-weighted and corroborated where possible.
+    if is_video and pwtf is not None and pwtf >= 60:
+        p05 = float((pwtf_metrics or {}).get("coherence_p05", 1.0))
+        flat = float((pwtf_metrics or {}).get("spectral_flatness", 0.0))
+        ac1 = float((pwtf_metrics or {}).get("residual_ac1", 0.0))
+        detail["pwtf_p05"] = round(p05, 4)
+        detail["pwtf_flatness"] = round(flat, 4)
+        detail["pwtf_ac1"] = round(ac1, 4)
+        if p05 < 0.25:
+            score = max(score, 72 if strong_count else 60)
+            reasons.append(
+                "Pixel-wise temporal frequency analysis found a collapsed coherence "
+                "floor - the least-coherent pixels share almost no temporal model with "
+                "the scene, which is consistent with regeneration or synthetic generation "
+                "in part of the clip."
+            )
+        elif flat >= 0.80 and ac1 <= 0.30:
+            score = max(score, 58)
+            reasons.append(
+                "Pixel-wise temporal frequency analysis found white, unstructured "
+                "temporal residuals - consistent with temporally independent per-pixel "
+                "noise rather than physical motion persistence."
+            )
+
+    # 4. Several agreeing spatial layers is strong AI-artifact evidence.
+    if strong_count >= 2:
+        score = max(score, min(88, score + 8))
+        reasons.append(
+            f"{strong_count} spatial forensic layers returned strong synthetic readings, "
+            "which is consistent with AI-generated or AI-altered content."
+        )
+
+    return score, reasons, detail
 
 
 def fuse_ensemble_verdict(
@@ -26,10 +317,13 @@ def fuse_ensemble_verdict(
     weights = {
         "synthid": 0.25,
         "c2pa": 0.20,
-        "metadata": 0.20,   # AI-provenance metadata probe (file/container/URL/
+        "metadata": 0.22,   # AI-provenance metadata probe (file/container/URL/
                               # caption markers; see forensics/ai_metadata.py).
-                              # >= 95 hard-overrides below; 70-94 escalates via
-                              # the metadata floor; 35 is a soft anti-AI vote.
+                              # Higher weight because provenance claims are strong
+                              # evidence about content origin. >= 95 hard-overrides
+                              # below; 80+ generator-specific scores escalate via
+                              # metadata floor; 70-79 via standard provenance floor;
+                              # 35 is a soft anti-AI vote.
         "frequency": 0.12,
         "neural": 0.20,
         "spai": 0.15,   # SPAI spectral analysis (CVPR 2025)
@@ -37,25 +331,49 @@ def fuse_ensemble_verdict(
         "pwtf": 0.14 if is_video else 0.0,       # PwTF-DVD pixel-wise temporal
                                                   # frequency (ICCV 2025) - the
                                                   # strongest temporal signal
+        "tr": 0.10 if is_video else 0.0,         # Temporal-residual probe
+                                                  # (forensics/temporal_residual.py).
+                                                  # See the TR_VOTE note at the top.
         # D3 second-order dynamics (ICCV 2025) runs as a METRICS layer on this
         # stack (pixel-space volatility does not separate - see
         # forensics/d3.py); weight 0.0 keeps it out of the fusion unless it is
         # ever activated behind calibrated encoder embeddings.
         "d3": 0.0,
+
+        # rPPG (remote photoplethysmography, cardiac-pulse consistency from a
+        # face video) - small temporal-family weight. Confidence-weighted and
+        # fusion-only: a present/absent pulse is no longer decisive alone given
+        # modern fakes can synthesize a heartbeat (Seibold et al., Frontiers in
+        # Imaging 2025). Returns inactive (score None) on non-face videos and
+        # images, so it never votes there.
+        "rppg": 0.05 if is_video else 0.0,
     }
 
     if not is_video:
         weights.pop("temporal", None)
         weights.pop("pwtf", None)
         weights.pop("d3", None)
+        weights.pop("rppg", None)
     else:
         # On video the metadata layer carries provenance claims about the
         # source post (caption/URL), not pixel forensics - keep its weight
         # meaningful but below the pixel-forensics layers.
         weights["metadata"] = min(weights.get("metadata", 0.20), 0.18)
 
+    # Layers that are computed and reported (window_details / reasons) but
+    # deliberately never scored in the fusion. D3 is metrics-only (pixel-space
+    # volatility does not separate; see forensics/d3.py). The temporal-residual
+    # probe ("tr") is NO LONGER here - it is promoted to a guarded vote behind
+    # the TR_VOTE flag (see the module-level note); it enters `available` only
+    # when it actually fires (score not None), so it never inflates the layer
+    # count on clips it is silent about.
+    METRICS_ONLY_LAYERS = ("d3",)
+
     # Filter available layers (where score is not None)
-    available = {k: v for k, v in layers.items() if v is not None and k in weights}
+    available = {
+        k: v for k, v in layers.items()
+        if v is not None and k in weights and k not in METRICS_ONLY_LAYERS
+    }
 
     # Video-mode escalation guard: the temporal layers (pwtf/temporal) analyze
     # compressed, downscaled 128px thumbnails, so a lone high temporal reading
@@ -151,17 +469,23 @@ def fuse_ensemble_verdict(
     # Metadata-driven escalation: a strong provenance claim (caption/source
     # naming a generator, >= 70 from the ai_metadata probe) lifts the fused
     # verdict into the suspicious band when nothing contradicts it. The score
-    # 95 in-file case is handled by the hard override above. Capped at 74:
-    # a provenance claim is strong evidence about the content's origin, but
-    # no pixel-forensics layer corroborates it, so it stays below the
-    # synthetic band.
+    # 95 in-file case is handled by the hard override above.
     if (
         metadata_val is not None
         and 70 <= metadata_val < 95
         and not authenticity_override
         and weights_floor is None
     ):
-        raw_score = max(raw_score, 66.0)
+        # Generator-specific detections (score 80+) get a stronger floor:
+        # these are confident tool identifications, not just generic AI claims.
+        if metadata_val >= 80:
+            # Specific generator identified in file/label - strong provenance.
+            # Lift to suspicious band (66+) but cap below synthetic tier since
+            # no pixel forensics corroborates.
+            raw_score = max(raw_score, 66.0)
+        else:
+            # Generic provenance claim (caption names unspecified AI tool).
+            raw_score = max(raw_score, 64.0)
     if not authenticity_override and weights_floor is None:
         if strongest >= 85:
             raw_score = max(raw_score, min(strongest, 82.0))
@@ -214,6 +538,8 @@ def fuse_ensemble_verdict(
     # escalate. Anything else is a false positive from motion/compression.
     pwtf_val = layers.get("pwtf")
     pwtf_metrics = (extra_data or {}).get("pwtf_metrics") if extra_data else None
+    tr_val = layers.get("tr")
+    tr_strong = bool(is_video and tr_val is not None and tr_val >= 60)
     # A TOTAL coherence-floor collapse (p05 < 0.10) sits far below anything
     # real footage produces (calibrated: real reels keep p05 >= 0.31 across
     # every shot window; generated regions collapse to ~0.00). This deep
@@ -251,25 +577,103 @@ def fuse_ensemble_verdict(
             if len(spatial_strong) >= 2:
                 raw_score = max(raw_score, min(max(pwtf_val, 78), 82.0))
             elif len(spatial_strong) == 1:
-                # One confident spatial classifier (e.g. CNNSpot at 70+) plus
-                # a total coherence collapse is at least SUSPICIOUS: measured
-                # case scored neural 76 with p05 = 0.00 and landed at 68
-                # UNCERTAIN (unbadged) - too weak for that evidence.
-                raw_score = max(raw_score, min(max(pwtf_val, 70), 75.0))
+                # One confident spatial classifier plus a real coherence-floor
+                # collapse is the main 'inflate the suspicious 66 shoulder' case.
+                # That shoulder used to sit around 62-66; with one corroborating
+                # spatial layer we now let it rise higher on the fused score.
+                # Keep it below the SYNTHETIC_AI line by construction, so temporal
+                # corroboration can strengthen a SUSPICIOUS verdict without
+                # manufacturing a SYNTHETIC_AI verdict on its own.
+                # With one strong spatial layer plus a real coherence-floor collapse,
+                # lift the suspicious shoulder up to the target band you asked for.
+                # This is the 'inflate 66 to about 80' change; keep it below the
+                # SYNTHETIC_AI threshold so temporal corroboration strengthens a
+                # SUSPICIOUS verdict but does not manufacture a synthetic one.
+                # With one strong spatial layer plus a real coherencefloor
+                # collapse, lift the suspicious shoulder up to the target band
+                # you asked for ('inflate 66 to about 80'). Keep it below the
+                # SYNTHETIC_AI line so temporal corroboration strengthens a
+                # SUSPICIOUS verdict without manufacturing a synthetic one.
+                raw_score = max(raw_score, min(max(pwtf_val, 70), 80.0))
             elif total_collapse:
-                # Near-total collapse, no confident spatial layer: the
-                # structural signature alone earns the suspicious band floor
-                # (66), never higher - the layer still only sees a 128px
-                # grayscale thumbnail.
+                # Near-total collapse, no confident spatial layer: still cap
+                # below the synthetic tier because the layer only sees a 128px
+                # grayscale thumbnail. Raise cautiously if needed, but do not let
+                # temporal-only evidence reach SYNTHETIC_AI.
                 raw_score = max(raw_score, min(max(pwtf_val, 66), 66.0))
             else:
                 raw_score = max(raw_score, min(pwtf_val - 4, 58.0))
+
+    # Post-escalation: optional forced suspicious shoulder for user-facing
+    # clarity on video cases with a real temporal collapse plus at least one
+    # corroborating spatial layer. This is the 'inflate 66 to about 80'
+    # adjustment, separate from the tier decision above. If you prefer the old
+    # more-conservative scoring, set this to False or raise the ceiling back
+    # toward 66.
+    _VIDEO_SUSPECTED_SHOULDER_INFLATE = True
+    if (
+        _VIDEO_SUSPECTED_SHOULDER_INFLATE
+        and is_video
+        and raw_score < 80
+        and pwtf_val is not None
+        and pwtf_val >= 60
+        and pwtf_metrics
+        and pwtf_metrics.get("coherence_p05", 1.0) < 0.25
+        and len(spatial_strong) >= 1
+    ):
+        raw_score = max(raw_score, 79.0)
+
+    # p05 >= 0.25: NOT a real collapse. This is a false positive from
+    # motion, compression, or other artifacts on real footage.
+    # Don't escalate - the temporal layer evidence is unreliable here.
+    # The weighted average still reflects pwtf, but no escalation.
+    pass
+
+    # Temporal-residual escalation (plan P1). Runs AFTER the temporal-only
+    # weights_floor cap above, so it is the one temporal signal allowed to lift
+    # a self-consistent clip out of the low band. Guarded exactly like pwtf:
+    # corroboration raises it further, and temporal-only evidence is capped at
+    # 79 so it can reach the SUSPICIOUS band but never SYNTHETIC_AI. Measured
+    # 2026-10-12: flips the two case-study clips (tr 62, no spatial support) to
+    # SUSPICIOUS while leaving every real local clip (tr None) unchanged.
+    if TR_VOTE and tr_strong and not authenticity_override and raw_score < 80:
+        spatial_strong_tr = [
+            v for k, v in available.items()
+            if k in ("c2pa", "synthid", "metadata", "neural", "frequency", "spai") and v >= 70
+        ]
+        if len(spatial_strong_tr) >= 1:
+            raw_score = max(raw_score, 79.0)
         else:
-            # p05 >= 0.25: NOT a real collapse. This is a false positive from
-            # motion, compression, or other artifacts on real footage.
-            # Don't escalate - the temporal layer evidence is unreliable here.
-            # The weighted average still reflects pwtf, but no escalation.
-            pass
+            raw_score = max(raw_score, 69.0)
+        raw_score = min(raw_score, 79.0)
+
+    # STRICT-mode escalations (recall-first; see VIDEO_STRICT note at the top).
+    # Applied last so they can lift a clip the calibrated paths left low. They
+    # can reach the SUSPICIOUS band but are capped below 80 (never SYNTHETIC_AI
+    # from a weak temporal hint alone), and they respect a confirmed-camera or
+    # watermark authenticity override.
+    strict_whiteness = False
+    if VIDEO_STRICT and is_video and not authenticity_override and raw_score < 80:
+        fm = pwtf_metrics or {}
+        flat_v = float(fm.get("spectral_flatness", 0.0)) if fm else 0.0
+        ac1_v = float(fm.get("residual_ac1", 1.0)) if fm else 1.0
+        # (a) Whiteness: temporally white residuals (semi-independent frames).
+        if fm and flat_v >= 0.85 and ac1_v <= 0.35:
+            strict_whiteness = True
+            raw_score = max(raw_score, 66.0)
+        # (b) Lowered pwtf gate on a mildly weakened coherence floor.
+        if pwtf_val is not None and pwtf_val >= 45 and fm and fm.get("coherence_p05", 1.0) < 0.35:
+            strict_whiteness = True
+            raw_score = max(raw_score, 66.0)
+        # Anti-false-authentic floor: any elevated temporal reading means the
+        # video is at least INCONCLUSIVE, never a confident AUTHENTIC_HUMAN.
+        if (
+            (pwtf_val is not None and pwtf_val >= 25)
+            or tr_strong
+            or (fm and flat_v >= 0.80 and ac1_v <= 0.45)
+        ):
+            raw_score = max(raw_score, 40.0)
+        raw_score = min(raw_score, 79.0)
 
     final_score = int(round(min(99, max(1, raw_score))))
 
@@ -344,16 +748,25 @@ def fuse_ensemble_verdict(
     elif final_score >= 69:
         tier = "SUSPICIOUS"
     elif final_score >= 62 and metadata_val is not None and metadata_val >= 70:
-        # Metadata-escalated verdicts (66-68): a source-label provenance claim
+        # Metadata-escalated verdicts (64-68): a source-label provenance claim
         # is decisive evidence about the content's origin - not a borderline
         # pixel reading - so 62-68 with a >= 70 metadata vote reads SUSPICIOUS.
         # (66 UNCERTAIN on a caption that names the generator tool misled.)
         tier = "SUSPICIOUS"
+    elif final_score >= 60 and metadata_val is not None and metadata_val >= 80:
+        # Generator-specific detection (metadata 80+) with score 60-68:
+        # even with lower fused score, the specific generator ID is strong
+        # provenance evidence -> SUSPICIOUS, not UNCERTAIN.
+        tier = "SUSPICIOUS"
     elif final_score >= 55:
-        # HIGH-confidence agreement or a confirmed total coherence collapse
-        # (structural evidence, see above) both justify SUSPICIOUS in the
-        # 55-68 band; everything else is UNCERTAIN.
-        tier = "SUSPICIOUS" if (confidence == "HIGH" or total_collapse) else "UNCERTAIN"
+        # HIGH-confidence agreement, a confirmed total coherence collapse, a
+        # strong temporal-residual reading, or a strict-mode whiteness hit
+        # (structural evidence, see above) all justify SUSPICIOUS in the 55-68
+        # band; everything else is UNCERTAIN.
+        tier = "SUSPICIOUS" if (
+            confidence == "HIGH" or total_collapse or (TR_VOTE and tr_strong)
+            or strict_whiteness
+        ) else "UNCERTAIN"
     elif final_score >= 35:
         tier = "INCONCLUSIVE"
     elif is_video and not temporal_ran and not (
@@ -369,10 +782,70 @@ def fuse_ensemble_verdict(
 
     # Consolidate reasons - watermark/manifest/spatial forensics first; the
     # temporal layers last, since on video they are supplementary evidence.
+    # rppg reasons are surfaced here too (applies/pulse_present readouts).
     all_reasons: List[str] = []
-    for k in ["c2pa", "synthid", "metadata", "neural", "frequency", "spai", "pwtf", "temporal", "d3"]:
+    for k in ["c2pa", "synthid", "metadata", "neural", "frequency", "spai", "pwtf", "temporal", "d3", "rppg"]:
         if k in layer_reasons and layer_reasons[k]:
             all_reasons.extend(layer_reasons[k])
+
+    # ---- Two-axis output: altered vs AI-artifact ----
+    # Keep the legacy single-score fusion above for backward compatibility, but
+    # also emit explicit axes so callers can say 'altered' and/or 'has AI
+    # artifacts' instead of only a vague 'suspicious'.
+    pwtf_metrics = (extra_data or {}).get("pwtf_metrics") if extra_data else None
+    d3_metrics = (extra_data or {}).get("d3_metrics") if extra_data else None
+    neural_submodels = (extra_data or {}).get("neural_submodels") if extra_data else None
+    pf_hits = (extra_data or {}).get("pf_hits") if extra_data else None
+    pf_strong = bool((extra_data or {}).get("pf_strong")) if extra_data else False
+    character_match = (extra_data or {}).get("character_match") if extra_data else None
+
+    alteration_score, alteration_reasons, alteration_detail = _local_inconsistency_score(
+        pwtf_metrics=pwtf_metrics,
+        neural_submodels=neural_submodels,
+        pf_hits=pf_hits,
+        d3_metrics=d3_metrics,
+    )
+    ai_artifact_score, ai_artifact_reasons, ai_artifact_detail = _ai_artifact_score(
+        layers=layers,
+        layer_reasons=layer_reasons,
+        pwtf_metrics=pwtf_metrics,
+        d3_metrics=d3_metrics,
+        pf_hits=pf_hits,
+        pf_strong=pf_strong,
+        character_match=character_match,
+        is_video=is_video,
+    )
+
+    def _axis_label(score: int) -> str:
+        if score >= 80:
+            return "yes"
+        if score >= 60:
+            return "likely"
+        if score >= 40:
+            return "possible"
+        return "unlikely"
+
+    alteration_label = _axis_label(alteration_score)
+    ai_artifact_label = _axis_label(ai_artifact_score)
+
+    # Derived human-readable short label that matches what you asked for.
+    if alteration_label in ("yes", "likely") and ai_artifact_label in ("yes", "likely"):
+        short_label = "Altered with AI artifacts"
+    elif alteration_label in ("yes", "likely"):
+        short_label = "Altered"
+    elif ai_artifact_label in ("yes", "likely"):
+        short_label = "Has AI artifacts"
+    elif alteration_label == "possible" or ai_artifact_label == "possible":
+        short_label = "Possibly altered or AI-affected"
+    else:
+        short_label = "No clear alteration or AI artifacts detected"
+
+    if is_video and alteration_label in ("yes", "likely"):
+        short_label = "Altered region detected"
+    elif is_video and ai_artifact_label in ("yes", "likely") and alteration_label not in ("yes", "likely"):
+        short_label = "Has AI artifacts"
+    elif is_video and ai_artifact_label == "possible" and alteration_label not in ("yes", "likely", "possible"):
+        short_label = "Possibly has AI artifacts"
 
     result: Dict[str, Any] = {
         "score": final_score,
@@ -380,7 +853,26 @@ def fuse_ensemble_verdict(
         "tier": tier,
         "layers_active": list(available.keys()),
         "breakdown": {k: int(round(v)) for k, v in available.items()},
-        "reasons": all_reasons
+        "reasons": all_reasons,
+        "alteration": {
+            "label": alteration_label,
+            "score": alteration_score,
+            "short_label": ("Altered" if alteration_label in ("yes", "likely") else
+                            ("Possible alteration" if alteration_label == "possible" else
+                             "No clear alteration evidence")),
+            "reasons": alteration_reasons,
+            **alteration_detail,
+        },
+        "ai_artifact": {
+            "label": ai_artifact_label,
+            "score": ai_artifact_score,
+            "short_label": ("Has AI artifacts" if ai_artifact_label in ("yes", "likely") else
+                            ("Possible AI artifacts" if ai_artifact_label == "possible" else
+                             "No clear AI-artifact evidence")),
+            "reasons": ai_artifact_reasons,
+            **ai_artifact_detail,
+        },
+        "short_label": short_label,
     }
 
     if extra_data:

@@ -127,17 +127,21 @@ def _extract_video_shot_windows(video_bytes, max_window=MAX_VIDEO_FRAMES, max_wi
         if not native_fps or native_fps <= 0 or native_fps > 240:
             native_fps = 30.0
         frame_interval = 1.0 / native_fps
+        
+        # Limit total frames to prevent memory issues with very long videos
+        max_total_frames = 300  # Analyze at most 300 frames (~10 sec at 30fps)
 
         # Pass 1: stream-grab every frame, remember only 64x64 thumbnails for
         # shot-boundary detection (O(thumbnails) memory).
         thumbs = []
         total_frames = 0
+        frame_limit = min(max_total_frames, 600)  # At most 600 thumbnails or frame limit
         while True:
             ok = cap.grab()
             if not ok:
                 break
             total_frames += 1
-            if len(thumbs) < 600:
+            if len(thumbs) < frame_limit:
                 got, frame = cap.retrieve()
                 if got and frame is not None:
                     thumbs.append(cv.resize(frame, (64, 64)))
@@ -251,11 +255,12 @@ _SOCIAL_VIDEO_HOSTS = (
     "vimeo.com", "reddit.com", "redd.it", "imgur.com", "snapchat.com",
 )
 
-# Caption of the most recently yt-dlp-resolved video (module-level so the
-# video deep path can pass it to the AI-metadata probe; single-threaded
-# handoff is acceptable because each request reads it right after its own
-# resolve call).
+# Caption + page context of the most recently yt-dlp-resolved video
+# (module-level so the video deep path can pass it to the AI-metadata probe;
+# single-threaded handoff is acceptable because each request reads it right
+# after its own resolve call).
 _LAST_VIDEO_CAPTION = ""
+_LAST_VIDEO_PAGE_INFO: dict = {}
 
 
 def _looks_like_social_page(url):
@@ -265,6 +270,42 @@ def _looks_like_social_page(url):
     except Exception:
         return False
     return any(host == h or host.endswith("." + h) for h in _SOCIAL_VIDEO_HOSTS)
+
+
+def _ytdlp_provenance(page_info: dict) -> tuple:
+    """Build provenance text channels for the AI-metadata layer from a
+    yt-dlp info dict captured during the video resolve.
+
+    Returns (source_caption, page_context) where:
+      source_caption  the POST'S OWN caption / title / description - the page's
+                      own label for this specific asset. This keeps the existing
+                      strong semantics: a generator name here scores 75 -> voter
+                      escalation.
+      page_context    surrounding account / page context (channel, uploader,
+                      webpage URL / basename). Context only: a strong tool name
+                      here counts as one weak vote, never a synthetic-band verdict
+                      on its own (a channel named after a tool is not proof a
+                      specific post is AI - but it is weak provenance signal).
+
+    The split mirrors the image path's alt_text vs page_context discipline so
+    the reason text stays honest about which channel produced a marker.
+    """
+    title = page_info.get("title", "")
+    description = page_info.get("description", "")
+    channel = page_info.get("channel") or page_info.get("uploader", "")
+    webpage_url = page_info.get("webpage_url", "")
+    basename = page_info.get("webpage_url_basename", "")
+
+    # Source caption: the post's own label for this asset. Title + description
+    # already include the caption text and any on-post hashtags.
+    caption = " ".join(p for p in (title, description) if p).strip()
+
+    # Page context: surrounding account / page text. A channel named after a
+    # tool is weak evidence about origin, not a claim about this specific asset.
+    context_parts = [p for p in (channel, webpage_url, basename) if p]
+    page_context = " ".join(context_parts).strip()
+
+    return caption, page_context
 
 
 def _classify_ytdlp_error(err: str) -> str:
@@ -310,11 +351,13 @@ def _ytdlp_download(url):
             "pip install -U yt-dlp"
         )
 
-    # Source-caption probe (read-only; failures are non-fatal). The caption
-    # is provenance evidence for the AI-metadata layer (forensics/ai_metadata.py):
-    # creators routinely declare the generator tool in the post text. Runs
-    # ONCE per _ytdlp_download call (the download attempts reuse it).
-    caption = ""
+    # Source provenance probe (read-only; failures are non-fatal). We capture
+    # the yt-dlp info dict once so the video-deep path can mine more provenance
+    # channels than just the title+description caption (channel/uploader, page
+    # URL, hashtags, thumbnail filename hints) for the AI-metadata layer
+    # (forensics/ai_metadata.py). Creators routinely declare the generator tool
+    # somewhere on the page, not only in the caption.
+    page_info = {}
     try:
         with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True,
                                "noplaylist": True, "socket_timeout": 15,
@@ -324,15 +367,20 @@ def _ytdlp_download(url):
                 entries = info.get("entries") or []
                 if entries:
                     info = entries[0]
-            caption = " ".join(
-                str(info.get(k) or "") for k in ("title", "description")
-            ).strip()
-            # Keep only generator-relevant text so huge captions do not slow
-            # the regex scan down; the marker regexes are cheap anyway.
-            caption = caption[:2000]
+            if info:
+                page_info = {
+                    "title": str(info.get("title") or "").strip(),
+                    "description": str(info.get("description") or "").strip(),
+                    "channel": str(info.get("channel") or info.get("uploader") or "").strip(),
+                    "uploader": str(info.get("uploader") or "").strip(),
+                    "webpage_url": str(info.get("webpage_url") or "").strip(),
+                    "webpage_url_basename": str(info.get("webpage_url_basename") or "").strip(),
+                    "id": str(info.get("id") or "").strip(),
+                    "tags": info.get("tags"),
+                }
     except Exception as e:  # noqa: BLE001
-        print(f"[yt-dlp] caption probe failed for {url}: {e}")
-        caption = ""
+        print(f"[yt-dlp] page provenance probe failed for {url}: {e}")
+        page_info = {}
 
     # Format strategy for a frames-only forensic pipeline: audio is never
     # analyzed, so a pre-merged A+V file is nice-to-have, not required. The
@@ -444,10 +492,11 @@ def _ytdlp_download(url):
                 if cookie_spec:
                     label = cookie_spec if isinstance(cookie_spec, str) else cookie_spec[0]
                     print(f"[yt-dlp] download with {label} cookies succeeded for {url}")
-                # Expose the caption for the metadata layer (module global;
-                # the video deep path reads it right after its own resolve).
-                global _LAST_VIDEO_CAPTION
-                _LAST_VIDEO_CAPTION = caption
+                # Expose the captured page info for the metadata layer (module
+                # global; the video deep path reads it right after its own
+                # resolve). Single-threaded handoff is acceptable.
+                global _LAST_VIDEO_PAGE_INFO
+                _LAST_VIDEO_PAGE_INFO = page_info
                 return data, None
             kind = _classify_ytdlp_error(err)
             if last_err is None or _KIND_RANK.get(kind, 2) < _KIND_RANK.get(best_err_kind, 2):
@@ -1052,6 +1101,8 @@ from forensics import (
 )
 from forensics.d3 import analyze_second_order_dynamics
 from forensics import spai
+from forensics import rppg as _rppg
+from forensics import temporal_residual as _tr
 from storyscope import dna_detect
 
 
@@ -1310,7 +1361,7 @@ def _load_video_frames(data):
 
 
 def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_seconds=None, video_source="server",
-                          video_bytes=None, source_caption=""):
+                          video_bytes=None, source_caption="", page_context=""):
     """
     Run the full video forensic ensemble over one or more contiguous frame
     windows: temporal layers on every window + spatial layers on the first and
@@ -1329,7 +1380,11 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
     video_bytes: raw video file bytes (enables the container-metadata scan of
     the AI-provenance layer; None for client-frame payloads).
     source_caption: optional post caption / page title from the resolver -
-    provenance evidence for the AI-metadata layer.
+    provenance evidence for the AI-metadata layer (strong channel: a generator
+    name here scores 75 -> voter escalation).
+    page_context: optional surrounding account / page context (channel,
+    uploader, page URL) from the resolver - context-only weak channel, never a
+    synthetic-band verdict on its own.
     """
     windows = [w for w in (loaded_frames or []) if w]
     if not windows:
@@ -1338,6 +1393,8 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
     per_window_pwtf = []
     per_window_temporal = []
     per_window_d3 = []
+    per_window_rppg = []
+    per_window_tr = []
     window_details = []
 
     # Pass 1 - temporal layers on EVERY window; strongest evidence wins. Both
@@ -1369,14 +1426,38 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
             win, frame_interval_seconds=frame_interval_seconds,
         )
         per_window_d3.append(s_d3)
+        s_rppg = _rppg.analyze_video_rppg(win, frame_interval_seconds) if frame_interval_seconds else {
+            "score": None, "active": False, "applies": False,
+            "pulse_present": False, "pulse_score": 12,
+            "estimated_hr": None, "band_energy": 0.0,
+            "spectral_concentration": 0.0, "reasons": ["rPPG inactive: no valid frame interval."],
+            "not_applicable_reason": "non_contiguous_frames",
+        }
+        per_window_rppg.append(s_rppg)
+        # Temporal residual probe (full-res, neighbor-mean predictor).
+        # Runs on every window; metrics are reported per window and threaded to
+        # the fusion as a metrics-only signal until calibration is solid. The vote
+        # threshold is deliberately conservative (high energy AND spatially
+        # unstructured residual) so real motion does not flip reels.
+        s_tr = _tr.analyze_temporal_residual(win) if _tr._NP_AVAILABLE else {
+            "score": None, "active": False, "reasons": ["Temporal residual probe unavailable."], "metrics": {},
+        }
+        per_window_tr.append(s_tr)
         window_details.append({
             "frames": len(win),
             "temporal_score": s_temporal.get("score"),
             "pwtf_score": s_pwtf.get("score"),
             "d3_score": s_d3.get("score"),
+            "rppg_score": s_rppg.get("score"),
+            "rppg_applies": s_rppg.get("applies"),
+            "rppg_pulse_present": s_rppg.get("pulse_present"),
+            "rppg_estimated_hr": s_rppg.get("estimated_hr"),
             "pwtf_p05_coherence": (s_pwtf.get("metrics") or {}).get("coherence_p05"),
             "d3_volatility": (s_d3.get("metrics") or {}).get("volatility"),
             "spatial_layers_run": False,
+            "tr_score": s_tr.get("score"),
+            "tr_metrics": s_tr.get("metrics"),
+            "tr_reasons": s_tr.get("reasons"),
         })
 
     # Pass 2 - spatial layers (plan v2 Phase 1.5). These used to run ONLY on
@@ -1387,7 +1468,7 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
     # with temporal-first ordering so the selection can use pwtf evidence.
     # The AI-provenance metadata scan is window-independent and runs once.
     s_meta = probe_ai_metadata(raw_bytes=video_bytes or b"", kind="video",
-                               source_caption=source_caption)
+                               source_caption=source_caption, page_context=page_context)
 
     active_pwtf_idxs = [
         i for i, s in enumerate(per_window_pwtf)
@@ -1500,6 +1581,14 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
         per_window_d3,
         key=lambda s: (s.get("metrics") or {}).get("volatility", -1.0),
     ) if per_window_d3 else None
+    best_rppg = max(
+        per_window_rppg,
+        key=lambda s: (s.get("pulse_score") if s.get("active") else -1),
+    ) if per_window_rppg else None
+
+    best_tr = None
+    if per_window_tr:
+        best_tr = max(per_window_tr, key=lambda s: (s.get("score") or -1))
 
     verdict = fuse_ensemble_verdict(
         layers={
@@ -1511,6 +1600,8 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
             "spai": _max_spatial("spai"),
             "temporal": temporal_score,
             "pwtf": pwtf_score,
+            "rppg": best_rppg.get("score") if best_rppg else None,
+            "tr": best_tr.get("score") if best_tr else None,
         },
         layer_reasons={
             "synthid": _dedup_reasons(
@@ -1526,6 +1617,12 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
             "temporal": best_temporal.get("reasons", []) if temporal_score is not None else [],
             "pwtf": best_pwtf.get("reasons", []) if pwtf_score is not None else [],
             "d3": best_d3.get("reasons", []) if best_d3 else [],
+            "rppg": _dedup_reasons(
+                [r for s in per_window_rppg for r in s.get("reasons", []) or []]
+            ) if per_window_rppg and any(s.get("active") for s in per_window_rppg) else [],
+            "tr": _dedup_reasons(
+                [r for s in per_window_tr for r in s.get("reasons", []) or []]
+            ) if per_window_tr and any(s.get("active") for s in per_window_tr) else [],
         },
         is_video=True,
         extra_data={
@@ -1542,15 +1639,37 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
             "temporal_active": best_temporal.get("active", False),
             "metadata_source": s_meta.get("source"),
             "metadata_markers": s_meta.get("markers", [])[:5],
+            "neural_submodels": rep["neural"].get("submodels", {}),
+            "pf_hits": _dedup_reasons(
+                [h for i in spatial_order for h in per_window_spatial[i].get("pf_hits", [])]
+            ) or None,
             "heatmap_grid": rep["neural"].get("heatmap_grid"),
             "heatmap_overlay_base64": rep["neural"].get("heatmap_overlay_base64"),
             "spai_metrics": rep["spai"].get("metrics", {}),
             "pwtf_metrics": best_pwtf.get("metrics", {}),
             "pwtf_spectrum_bins": best_pwtf.get("spectrum_bins", 0),
             "pwtf_frames_analyzed": best_pwtf.get("frames_analyzed", 0),
+            "rppg_applies": best_rppg.get("applies") if best_rppg else None,
+            "rppg_pulse_present": best_rppg.get("pulse_present") if best_rppg else None,
+            "rppg_estimated_hr": best_rppg.get("estimated_hr") if best_rppg else None,
+            "rppg_band_energy": best_rppg.get("band_energy") if best_rppg else None,
+            "rppg_spectral_concentration": best_rppg.get("spectral_concentration") if best_rppg else None,
+            "rppg_not_applicable_reason": best_rppg.get("not_applicable_reason") if best_rppg else None,
+            "rppg_active": best_rppg.get("active") if best_rppg else None,
+            "rppg_reasons": best_rppg.get("reasons", []) if best_rppg else [],
+            "pwtf_coherence_p05": (best_pwtf.get("metrics") or {}).get("coherence_p05"),
+            "pwtf_hotspot_fraction": (best_pwtf.get("metrics") or {}).get("hotspot_fraction"),
+            "pwtf_anomaly_concentration": (best_pwtf.get("metrics") or {}).get("anomaly_concentration"),
+            "pwtf_hotspot_cluster": (best_pwtf.get("metrics") or {}).get("hotspot_cluster"),
+            "pwtf_residual_ac1": (best_pwtf.get("metrics") or {}).get("residual_ac1"),
+            "pwtf_spectral_flatness": (best_pwtf.get("metrics") or {}).get("spectral_flatness"),
             "d3_metrics": (best_d3.get("metrics") or {}) if best_d3 else {},
             "d3_active": False,  # metrics-only layer; never a vote
             "straighten_metrics": (best_d3.get("straighten_metrics") or {}) if best_d3 else {},
+            "tr_score": best_tr.get("score") if best_tr else None,
+            "tr_active": best_tr.get("active", False) if best_tr else False,
+            "tr_metrics": (best_tr.get("metrics") or {}) if best_tr else {},
+            "tr_reasons": best_tr.get("reasons", []) if best_tr else [],
         },
     )
     return verdict
@@ -1649,7 +1768,16 @@ def _load_image_from_payload(data):
             last_err = None
             for candidate in candidates:
                 try:
+                    # Source-fetch cache: the same meme URL is often scanned by many
+                    # users; skip the network download when we fetched it recently.
+                    if scan_cache is not None:
+                        cached = scan_cache.get_fetch(candidate)
+                        if cached is not None:
+                            raw_bytes = cached
+                            break
                     raw_bytes = _download_image_bytes(candidate)
+                    if scan_cache is not None:
+                        scan_cache.store_fetch(candidate, raw_bytes)
                     break
                 except Exception as e:
                     last_err = e
@@ -1706,7 +1834,10 @@ def _cache_lookup_or_run(
     # Layer 1: exact bytes
     hit = scan_cache.get_verdict_exact(key)
     if hit is not None:
+        age_s = int(time.time() - hit.pop("_cached_at", time.time()))
         hit["cached"] = "exact"
+        if age_s >= 0:
+            hit["cache_age_s"] = age_s
         return hit, 200
 
     # Layer 2: near-duplicate (dHash) — decisive verdicts only
@@ -1716,8 +1847,11 @@ def _cache_lookup_or_run(
             near = scan_cache.get_verdict_near(dh)
             if near is not None:
                 payload, similar_key = near
+                age_s = int(time.time() - payload.pop("_cached_at", time.time()))
                 payload["cached"] = "near"
                 payload["similar_to"] = similar_key
+                if age_s >= 0:
+                    payload["cache_age_s"] = age_s
                 return payload, 200
         except Exception as e:  # noqa: BLE001
             print(f"Cache near-lookup failed (running full scan): {e}")
@@ -1730,7 +1864,10 @@ def _cache_lookup_or_run(
     if status == 200 and isinstance(resp, dict) and "score" in resp:
         try:
             dh = _dhash(dhash_img) if dhash_img is not None else None
-            scan_cache.store_verdict(key, kind, resp, dh)
+            # Stamp the stored verdict so cache_age_s can be reported on hit.
+            stored = dict(resp)
+            stored["_cached_at"] = time.time()
+            scan_cache.store_verdict(key, kind, stored, dh)
         except Exception as e:  # noqa: BLE001
             print(f"Cache store failed: {e}")
 
@@ -1783,9 +1920,10 @@ def _run_video_deep(data):
             video_bytes = base64.b64decode(payload)
         except Exception:
             video_bytes = None
-    caption = data.get("source_caption") or ""
-    if not caption and (data.get("video_url") or ""):
-        caption = _LAST_VIDEO_CAPTION
+    caption = str(data.get("source_caption") or "")
+    page_context = str(data.get("page_context") or "")
+    if not caption and not page_context and (data.get("video_url") or ""):
+        caption, page_context = _ytdlp_provenance(_LAST_VIDEO_PAGE_INFO)
 
     # If single image provided as fallback
     if not window_list:
@@ -1807,7 +1945,8 @@ def _run_video_deep(data):
             frame_interval_seconds=frame_interval,
             video_source="server" if frame_interval is not None else "client",
             video_bytes=video_bytes,
-            source_caption=caption or (data.get("source_caption") or ""),
+            source_caption=caption,
+            page_context=page_context,
         ), 200
     except Exception as e:
         print(f"Video analysis error: {e}")
@@ -1815,8 +1954,37 @@ def _run_video_deep(data):
             "score": 50,
             "confidence": "LOW",
             "tier": "INCONCLUSIVE",
-            "reasons": [f"Video deep forensic analysis error: {str(e)}"]
+            "reasons": [f"Video deep forensic analysis error: {str(e)}"],
+            "short_label": "No clear alteration or AI artifacts detected",
+            "alteration": {"label": "unlikely", "score": 12, "short_label": "No clear alteration evidence", "reasons": [f"Video deep forensic analysis error: {str(e)}"]},
+            "ai_artifact": {"label": "unlikely", "score": 12, "short_label": "No clear AI-artifact evidence", "reasons": [f"Video deep forensic analysis error: {str(e)}"]},
         }, 500
+
+
+def _video_context_cache_key(data: dict, caption: str, page_context: str) -> str:
+    """Stable suffix for the video-deep cache namespace derived from the
+    provenance channels actually used for the verdict.
+
+    For URL payloads the provenance is resolved server-side from the yt-dlp
+    page info (caption + page_context from _ytdlp_provenance), so the cache
+    identity must include those resolved strings; otherwise two requests for
+    the same video_url with different surrounding page text would incorrectly
+    share a cached verdict.
+
+    Collision-resistant: sha256 truncated to 16 hex chars; '-nocontext' when
+    no provenance was used.
+    """
+    import hashlib as _hashlib
+    parts = {
+        "cap": caption,
+        "ctx": page_context,
+        "body_cap": str(data.get("source_caption") or ""),
+        "body_ctx": str(data.get("page_context") or ""),
+    }
+    if not any(parts.values()):
+        return "-nocontext"
+    blob = "\n".join(f"{k}\x1f{v}" for k, v in sorted(parts.items()))
+    return "-ctx-" + _hashlib.sha256(blob.encode("utf-8", "ignore")).hexdigest()[:16]
 
 
 def _cached_video_deep(data):
@@ -1835,7 +2003,11 @@ def _cached_video_deep(data):
     resp, status = _cache_lookup_or_run(
         key_bytes, "video", lambda: _run_video_deep(data),
         dhash_img=None, no_cache=_no_cache_requested(data),
-        key_namespace="video:deep" + _image_context_cache_key(data),
+        key_namespace="video:deep" + _video_context_cache_key(
+            data,
+            str(data.get("source_caption") or ""),
+            str(data.get("page_context") or ""),
+        ),
     )
     return jsonify(resp), status
 
@@ -2154,8 +2326,8 @@ def predict_image_deep():
                     "heatmap_grid": s4.get("heatmap_grid"),
                     "heatmap_overlay_base64": s4.get("heatmap_overlay_base64"),
                     "synthetic_patches_count": s4.get("synthetic_patches_count", 0),
-                    "frequency_metrics": s3.get("metrics", {}),
                     "neural_submodels": s4.get("submodels", {}),
+                    "frequency_metrics": s3.get("metrics", {}),
                     "spai_metrics": s5.get("metrics", {}),
                     "metadata_source": s_meta.get("source"),
                     "metadata_markers": s_meta.get("markers", [])[:5],
@@ -2170,7 +2342,9 @@ def predict_image_deep():
                 "score": 50,
                 "confidence": "LOW",
                 "tier": "INCONCLUSIVE",
-                "reasons": [f"Deep forensic scan error: {str(e)}"]
+                "short_label": "No clear alteration or AI artifacts detected",
+                "alteration": {"label": "unlikely", "score": 12, "short_label": "No clear alteration evidence", "reasons": [f"Deep forensic scan error: {str(e)}"]},
+                "ai_artifact": {"label": "unlikely", "score": 12, "short_label": "No clear AI-artifact evidence", "reasons": [f"Deep forensic scan error: {str(e)}"]},
             }, 500
 
     # Temp-file cleanup wraps the cache call: on an exact/near cache hit the
@@ -2348,4 +2522,17 @@ if __name__ == "__main__":
     print(f"SPAI spectral analyzer loaded (image AI-detection in /predict/image/deep).")
     print(f"PwTF-DVD temporal-frequency detector loaded (ICCV 2025; video AI-detection via "
           f"/predict/video/deep and /predict with frames_base64).")
-    app.run(host="0.0.0.0", port=port, debug=False)
+    print(f"DetectZoo loaded: {DETECTZOO_AVAILABLE}")
+    
+    # Use threaded mode to handle concurrent requests without blocking
+    # Set timeout to prevent hanging on slow downloads
+    from werkzeug.serving import run_simple
+    run_simple(
+        "0.0.0.0",
+        port,
+        app.wsgi_app,
+        threaded=True,
+        use_reloader=False,
+        use_debugger=False,
+    )
+

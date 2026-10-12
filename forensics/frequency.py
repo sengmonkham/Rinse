@@ -10,6 +10,17 @@ from typing import Dict, Any, List, Tuple
 import numpy as np
 from PIL import Image
 
+# Grid-peak rule calibration (measured 2026-10-12). A genuine GAN /
+# deconvolution upsample grid appears as a SMALL SET of extreme, regularly
+# spaced spectral spikes. The natural-image log-spectrum is heavy-tailed, so
+# simply averaging everything above a mild sigma reads ~9-12 for ANY image.
+# The rule therefore requires a MINIMUM COUNT of spikes above a restrictive
+# sigma before it will score. Measured margins:
+#   calibration corpus (real photos + AI art): max ring z 3.0-4.1, ZERO pixels > 5 sigma
+#   synthetic checkerboard                   : max ring z 62.9, ~0.027% of ring pixels > 8 sigma
+_GRID_SPIKE_SIGMA = 6.0      # z-score a spike must exceed to count as grid energy
+_GRID_SPIKE_MIN_COUNT = 8    # minimum such spikes before the rule may score
+
 
 def _radial_average_spectrum(log_mag: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """Calculate the radially averaged power spectral density."""
@@ -110,7 +121,19 @@ def analyze_frequency_domain(img: Image.Image, include_grid_peaks: bool = True) 
         mean_hp = np.mean(ring_vals)
         std_hp = np.std(ring_vals) + eps
         peaks = (ring_vals - mean_hp) / std_hp
-        grid_peak_energy = float(np.mean(peaks[peaks > 3.0] ** 2) if np.any(peaks > 3.0) else 0.0)
+        # Count-gated extreme-spike metric (see _GRID_SPIKE_SIGMA doc). The old
+        # formula averaged the > 3-sigma tail, which is a heavy-tail artifact of
+        # every natural image: measured 2026-10-12 it read 9.0-12.0 for REAL
+        # photos and AI art alike, so its 4.5 threshold fired on everything and
+        # pushed real photos straight into the voter's >= 70 escalation floor
+        # (every real photo in tests/calibration_corpus read score 80 / tier 62).
+        # Requiring several spikes above a restrictive sigma yields 0 for smooth
+        # natural spectra and for a single compression artifact, while a real
+        # periodic grid (max z 62.9) still scores far above the 4.5 threshold.
+        strong = peaks[peaks > _GRID_SPIKE_SIGMA]
+        grid_peak_energy = (
+            float(np.mean(strong ** 2)) if strong.size >= _GRID_SPIKE_MIN_COUNT else 0.0
+        )
 
         # 4. 2D Haar Wavelet Subband Energy Ratios
         ll, lh, hl, hh = _haar_dwt_2d(arr)

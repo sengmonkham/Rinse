@@ -1,0 +1,45 @@
+{
+  "run_at": "2026-10-09T23:15:38",
+  "rows": [
+    {
+      "clip": "ig-deipai-m0mj",
+      "res": 128,
+      "score": 62,
+      "p05": 0.0,
+      "hf_share": 0.312,
+      "flatness": 0.914,
+      "ac1": 0.403,
+      "hotspot": 0.404
+    },
+    {
+      "clip": "ig-deipai-m0mj",
+      "res": 256,
+      "score": 62,
+      "p05": 0.0,
+      "hf_share": 0.33,
+      "flatness": 0.925,
+      "ac1": 0.266,
+      "hotspot": 0.38
+    },
+    {
+      "clip": "ig-human-post-01",
+      "res": 128,
+      "score": 5,
+      "p05": 0.67,
+      "hf_share": 0.321,
+      "flatness": 0.823,
+      "ac1": 0.764,
+      "hotspot": 0.306
+    },
+    {
+      "clip": "ig-human-post-01",
+      "res": 256,
+      "score": 12,
+      "p05": 0.746,
+      "hf_share": 0.37,
+      "flatness": 0.911,
+      "ac1": 0.639,
+      "hotspot": 0.321
+    }
+  ]
+}
