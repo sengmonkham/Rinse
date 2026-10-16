@@ -94,6 +94,141 @@ def _detect_shot_boundaries(frames_bgr, max_probe=600):
     return shots or ([(0, len(frames_bgr))] if len(frames_bgr) >= MAX_VIDEO_FRAMES else [])
 
 
+# ---------------------------------------------------------------------------
+# Temporal coverage sweep (2026-10-16)
+#
+# The primary analysis follows the calibrated shot-aware rule: one contiguous
+# window inside the richest shot, plus the strongest-pwtf shot's window. That
+# rule assumes the artifact is present in the shot we picked - and it can be
+# wrong: measured on two known-AI reels that the detector read as AUTHENTIC,
+# the artifacts were real and the EXISTING rules already fire on them, in
+# windows the pipeline never looked at (a 9 s single-shot reel collapses its
+# coherence floor in 5 of its 8 windows while the one window analyzed read a
+# healthy p05 = 0.65).
+#
+# The sweep closes that blind spot: it tiles the clip into consecutive windows
+# (bounded frame range and window count) and measures how much of the clip
+# carries the temporal artifact. It deliberately does NOT feed the escalation
+# paths the primary window drives - an isolated collapsed window is normal on
+# real footage (measured: 2 of 18 windows on a real clip, 1 of 7 on another) -
+# so only REPEATED convergence across the sweep escalates (see voter.py).
+# Streaming: one tile is held in memory at a time. Never raises.
+# Cost bounded deliberately: the sweep is temporal work on top of the primary
+# analysis, and the residual probe runs at full resolution. Measured worst case
+# on a 720x1280 15 s reel: ~13 tiles added ~40 s to a ~25 s scan. The defaults
+# (<= 8 tiles over the first 384 frames = 12.8 s at 30 fps) keep every clip in
+# the calibration set correctly classified while roughly halving that cost; both
+# are env-overridable for a server that wants finer coverage.
+_COVERAGE_MAX_FRAMES = int(os.environ.get("VIDEO_COVERAGE_MAX_FRAMES", "384"))
+_COVERAGE_MAX_WINDOWS = int(os.environ.get("VIDEO_COVERAGE_MAX_WINDOWS", "8"))
+_COVERAGE_COLLAPSE_P05 = 0.25   # same collapse threshold the pwtf escalation uses
+_COVERAGE_TR_MIN = 60           # temporal_residual fire threshold
+
+
+def _score_coverage_tile(frames, tr_mod):
+    """Score one sweep tile with the SAME layers/thresholds the verdict uses."""
+    s_pwtf = analyze_pixel_temporal_frequency(frames)
+    pm = s_pwtf.get("metrics") or {}
+    p05 = pm.get("coherence_p05")
+    pwtf_score = s_pwtf.get("score")
+    s_tr = tr_mod.analyze_temporal_residual(frames) if tr_mod._NP_AVAILABLE else {}
+    tr_score = s_tr.get("score")
+    collapse = bool(
+        pwtf_score is not None and pwtf_score >= 60
+        and p05 is not None and p05 < _COVERAGE_COLLAPSE_P05
+    )
+    tr_fire = bool(tr_score is not None and tr_score >= _COVERAGE_TR_MIN)
+    return {
+        "pwtf_score": pwtf_score,
+        "p05": p05,
+        "tr_score": tr_score,
+        "collapse": collapse,
+        "tr_fire": tr_fire,
+        "flagged": bool(collapse or tr_fire),
+    }
+
+
+def _temporal_coverage_sweep(video_bytes, skip_starts=()):
+    """Tile the clip into consecutive windows and count how many show temporal
+    generation evidence (coherence collapse or a temporal-residual fire).
+
+    Returns a compact aggregate + per-window records, or {} when the sweep
+    cannot run (no decoder, no bytes). Never raises into the verdict path.
+    """
+    try:
+        import cv2 as cv
+        from forensics import temporal_residual as tr_mod
+    except Exception:  # noqa: BLE001
+        return {}
+    if not video_bytes:
+        return {}
+
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+            f.write(video_bytes)
+            tmp = f.name
+        cap = cv.VideoCapture(tmp)
+        if not cap.isOpened():
+            return {}
+
+        # Tile starts across the bounded range, thinned evenly to the window cap
+        # and skipping tiles that overlap the primary analysis windows.
+        tiles = [
+            s for s in range(0, max(0, _COVERAGE_MAX_FRAMES - MAX_VIDEO_FRAMES + 1), MAX_VIDEO_FRAMES)
+            if all(abs(s - int(p)) >= MAX_VIDEO_FRAMES // 2 for p in skip_starts)
+        ]
+        if len(tiles) > _COVERAGE_MAX_WINDOWS > 1:
+            step = (len(tiles) - 1) / (_COVERAGE_MAX_WINDOWS - 1)
+            tiles = sorted({tiles[int(round(i * step))] for i in range(_COVERAGE_MAX_WINDOWS)})
+        if not tiles:
+            return {}
+
+        records = []
+        idx = 0
+        for start in tiles:
+            while idx < start:
+                if not cap.grab():
+                    break
+                idx += 1
+            if idx < start:
+                break  # clip ended early
+            buf = []
+            while idx < start + MAX_VIDEO_FRAMES:
+                if not cap.grab():
+                    break
+                got, frame = cap.retrieve()
+                idx += 1
+                if got and frame is not None:
+                    buf.append(Image.fromarray(cv.cvtColor(frame, cv.COLOR_BGR2RGB)))
+            if len(buf) >= MAX_VIDEO_FRAMES // 2:
+                rec = _score_coverage_tile(buf, tr_mod)
+                records.append({"start": start, **rec})
+        cap.release()
+
+        if not records:
+            return {}
+        flagged = sum(1 for r in records if r["flagged"])
+        return {
+            "frames_tiled": min(_COVERAGE_MAX_FRAMES, idx),
+            "analyzed": len(records),
+            "flagged": flagged,
+            "collapse_windows": sum(1 for r in records if r["collapse"]),
+            "tr_windows": sum(1 for r in records if r["tr_fire"]),
+            "flagged_frac": round(flagged / len(records), 3),
+            "windows": records,
+        }
+    except Exception as e:  # noqa: BLE001
+        print(f"Temporal coverage sweep failed: {e}")
+        return {}
+    finally:
+        if tmp and os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+
+
 def _extract_video_shot_windows(video_bytes, max_window=MAX_VIDEO_FRAMES, max_windows=3):
     """Decode the video and extract up to `max_windows` CONTIGUOUS native-frame-
     rate windows (each `max_window` frames) from the most content-rich shots.
@@ -205,6 +340,9 @@ def _extract_video_shot_windows(video_bytes, max_window=MAX_VIDEO_FRAMES, max_wi
             "total_frames": total_frames,
             "shots_detected": len(shots),
             "windows_analyzed": len(out),
+            # Start indices of the primary windows: the coverage sweep skips
+            # these tiles so its counts never double-count the primary evidence.
+            "window_starts": [start for start, _ in planned],
         }
         if out:
             # Provenance on the first window's first frame for the verdict.
@@ -382,8 +520,10 @@ def _ytdlp_download(url):
         print(f"[yt-dlp] page provenance probe failed for {url}: {e}")
         page_info = {}
 
-    # Format strategy for a frames-only forensic pipeline: audio is never
-    # analyzed, so a pre-merged A+V file is nice-to-have, not required. The
+    # Format strategy: the pixel/temporal layers are what the verdict is built
+    # on, so a pre-merged A+V file is preferred but not required - the audio
+    # layer (forensics/audio_track.py) analyzes whatever audio stream the
+    # resolved file carries and abstains honestly when there is none. The
     # selectors are tried in order of preference; each is a fallback chain
     # itself so a platform that lacks one container still downloads:
     #   1. pre-merged A+V mp4 (Instagram, most direct sites)
@@ -1103,6 +1243,7 @@ from forensics.d3 import analyze_second_order_dynamics
 from forensics import spai
 from forensics import rppg as _rppg
 from forensics import temporal_residual as _tr
+from forensics import audio_track as _audio
 from storyscope import dna_detect
 
 
@@ -1343,6 +1484,14 @@ def _load_video_frames(data):
             return [], None, None, (jsonify(err_body), 503)
         if not windows:
             return [], None, None, (jsonify({"error": "No analyzable contiguous shot windows found in the video."}), 422)
+        # Hand the resolved container bytes back to the caller so the audio
+        # layer decodes the audio track from the SAME download instead of a
+        # second fetch. Private key: popped in _run_video_deep, never
+        # serialized into a verdict. Deliberately NOT used by the container
+        # metadata scan - a yt-dlp download is a remux whose container tags
+        # belong to the downloader, not the uploader, so that layer keeps
+        # reading only originally-uploaded bytes (video_base64).
+        info["_raw_video_bytes"] = video_bytes
         return windows, frame_interval, info, None
 
     frames_b64 = data.get("frames_base64") or []
@@ -1361,7 +1510,8 @@ def _load_video_frames(data):
 
 
 def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_seconds=None, video_source="server",
-                          video_bytes=None, source_caption="", page_context=""):
+                          video_bytes=None, source_caption="", page_context="", audio_bytes=None,
+                          coverage=None):
     """
     Run the full video forensic ensemble over one or more contiguous frame
     windows: temporal layers on every window + spatial layers on the first and
@@ -1379,6 +1529,10 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
     video_source: "server" (native-rate contiguous windows) or "client".
     video_bytes: raw video file bytes (enables the container-metadata scan of
     the AI-provenance layer; None for client-frame payloads).
+    audio_bytes: raw container bytes the audio layer decodes its track from.
+    On server-side payloads this is the same download the frames came from
+    (uploaded file or resolved URL), so no second fetch is needed; None for
+    client-frame payloads, where the audio layer abstains honestly.
     source_caption: optional post caption / page title from the resolver -
     provenance evidence for the AI-metadata layer (strong channel: a generator
     name here scores 75 -> voter escalation).
@@ -1469,6 +1623,15 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
     # The AI-provenance metadata scan is window-independent and runs once.
     s_meta = probe_ai_metadata(raw_bytes=video_bytes or b"", kind="video",
                                source_caption=source_caption, page_context=page_context)
+
+    # Audio track (docs/audio-and-lip-sync-plan.md phase A0). Decoded from the
+    # SAME bytes the frames came from - no second download - and reported on a
+    # SEPARATE axis: this layer never votes on the video tier, because a
+    # synthetic voice over real footage is an audio-AI finding, not a deepfake
+    # video (a real clip with a TTS voiceover must not read SYNTHETIC_AI). It
+    # abstains honestly when there are no bytes (client-extracted frames carry
+    # no container audio) or no audio stream, and never fabricates a reading.
+    s_audio = _audio.analyze_audio_track(audio_bytes if audio_bytes is not None else video_bytes)
 
     active_pwtf_idxs = [
         i for i, s in enumerate(per_window_pwtf)
@@ -1623,6 +1786,10 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
             "tr": _dedup_reasons(
                 [r for s in per_window_tr for r in s.get("reasons", []) or []]
             ) if per_window_tr and any(s.get("active") for s in per_window_tr) else [],
+            # Audio is reported, never scored: these lines document what the
+            # audio layer found (and why it abstained when it did) so audio
+            # evidence is never silently ignored.
+            "audio": _dedup_reasons(s_audio.get("reasons", []) or []),
         },
         is_video=True,
         extra_data={
@@ -1670,6 +1837,16 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
             "tr_active": best_tr.get("active", False) if best_tr else False,
             "tr_metrics": (best_tr.get("metrics") or {}) if best_tr else {},
             "tr_reasons": best_tr.get("reasons", []) if best_tr else [],
+            # Temporal coverage sweep (see _temporal_coverage_sweep): how much of
+            # the clip - beyond the primary shot window - shows a coherence-floor
+            # collapse or a temporal-residual fire. Reported per window, and used
+            # by the voter only when the evidence REPEATS across the clip
+            # (an isolated collapse window is normal on real footage).
+            "temporal_coverage": coverage or {},
+            # Audio-track block (phase A0; metrics-only, separate axis - see the
+            # s_audio note above). Its score is always None, so it cannot move
+            # the video verdict; A1/A3 add av_sync + synthetic-speech siblings.
+            "audio": s_audio,
         },
     )
     return verdict
@@ -1904,10 +2081,14 @@ def _video_cache_bytes(data: dict):
 
 def _run_video_deep(data):
     """Full video deep pipeline; returns (verdict_dict, http_status)."""
-    window_list, frame_interval, _info, video_err = _load_video_frames(data)
+    window_list, frame_interval, info, video_err = _load_video_frames(data)
     if video_err:
         err_resp, err_status = video_err
         return err_resp.get_json(), err_status
+
+    # Container bytes the audio layer decodes from: the same download/upload the
+    # frames came from (popped so the private key never reaches a verdict).
+    audio_bytes = (info or {}).pop("_raw_video_bytes", None)
 
     # Raw bytes for the container-metadata scan: video_base64 decodes them
     # again cheaply; URL/frames payloads have none (the resolver already
@@ -1924,6 +2105,15 @@ def _run_video_deep(data):
     page_context = str(data.get("page_context") or "")
     if not caption and not page_context and (data.get("video_url") or ""):
         caption, page_context = _ytdlp_provenance(_LAST_VIDEO_PAGE_INFO)
+
+    # Temporal coverage sweep: only meaningful for contiguous native-rate
+    # server-side windows (client frame galleries have no reliable interval).
+    coverage = {}
+    if frame_interval is not None:
+        coverage = _temporal_coverage_sweep(
+            audio_bytes if audio_bytes is not None else video_bytes,
+            (info or {}).get("window_starts") or (),
+        )
 
     # If single image provided as fallback
     if not window_list:
@@ -1947,6 +2137,8 @@ def _run_video_deep(data):
             video_bytes=video_bytes,
             source_caption=caption,
             page_context=page_context,
+            audio_bytes=audio_bytes,
+            coverage=coverage,
         ), 200
     except Exception as e:
         print(f"Video analysis error: {e}")

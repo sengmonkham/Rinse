@@ -119,13 +119,13 @@ The temporal layers require **contiguous frames at native frame rate**: uniforml
 pip install -U yt-dlp
 ```
 
-Without yt-dlp the endpoint keeps the honest HTTP 415 advisory telling you to upload the file or paste a direct `.mp4`/`.webm`/`.mov` URL. Note that private, age-restricted, or login-walled posts cannot be resolved — download and upload the file in that case (X/Twitter videos in particular are increasingly login-walled; yt-dlp reports this clearly). yt-dlp must be kept up to date (`pip install -U yt-dlp`) because platforms change constantly. Because the forensic pipeline analyzes frames only, yt-dlp falls back to a **video-only** stream (e.g. YouTube's anonymous DASH offers no pre-merged A+V file) — no ffmpeg merge is needed, so servers without a working ffmpeg still analyze every platform.
+Without yt-dlp the endpoint keeps the honest HTTP 415 advisory telling you to upload the file or paste a direct `.mp4`/`.webm`/`.mov` URL. Note that private, age-restricted, or login-walled posts cannot be resolved — download and upload the file in that case (X/Twitter videos in particular are increasingly login-walled; yt-dlp reports this clearly). yt-dlp must be kept up to date (`pip install -U yt-dlp`) because platforms change constantly. The selector chain prefers a pre-merged A+V file (and an ffmpeg merge when a working ffmpeg is present); when a platform only yields a **video-only** stream, the frame layers still analyze the clip and the audio layer abstains honestly with a reason — it never invents a reading for audio that was never downloaded.
 
 **Download robustness (measured on real Instagram Reels and YouTube Shorts).** YouTube's modern pages offer no pre-merged A+V file at all, so the old two-selector chain failed with `Requested format is not available` and the video was never analyzed. The downloader now walks a layered selector chain, each a fallback in itself:
 
 1. `best[ext=mp4]/best` — pre-merged A+V (Instagram, most direct sites)
 2. `bv*+ba/b` — A+V **merge** via ffmpeg, only when a working ffmpeg is detected (YouTube DASH)
-3. `bestvideo[ext=mp4]/bestvideo` — video-only, no merge needed (this is the one that always works for a frames-only pipeline)
+3. `bestvideo[ext=mp4]/bestvideo` — video-only, no merge needed (the universal fallback; the audio layer abstains when this path is used)
 4. `b` — last resort
 
 The merge step passes `ffmpeg_location` explicitly (server processes often don't inherit a PATH containing ffmpeg), downloads run with `noprogress` so server logs stay readable, and a final failure reports the **server's yt-dlp version** plus the exact fix (`pip install -U yt-dlp`) in both the server log and the API error — the overwhelming majority of real download failures are stale yt-dlp extractors, since platforms change constantly. Rebuild the HF Space after bumping yt-dlp so the new version is actually installed.
@@ -148,6 +148,32 @@ Scores of 69–79 now always read SUSPICIOUS regardless of confidence (escalatio
 Several failure modes were fixed in the video ensemble so two different videos can no longer produce identical verdicts: the SynthID probe no longer emits a fabricated hard-coded 68 from spectral noise; the per-frame score trajectory runs real frequency forensics instead of a seeded RNG; the GAN-grid frequency rule is disabled for video frames (every H.264-decoded frame rings periodically after the 512×512 upscale, so the rule fired ~10 on *all* video); the flat-render/cel-shaded signature no longer votes on video frames (it detects saturated cartoon *style* — it fired on 74% of frames of a real hand-drawn animation reel and 0 frames of a generated photorealistic clip); and on video, a lone strong temporal reading can no longer escalate the fused score without spatial agreement (video escalation cap: 55 unless spatial layers corroborate; a pwtf ≥ 60 — reachable only via coherence-floor collapse — lifts the verdict to at most the suspicious band).
 
 The layer is deliberately conservative: mild compression or a moving camera does not trip it on its own — it is one weighted vote in the ensemble (`pwtf` weight 0.14, active only for video).
+
+### Temporal coverage sweep: where the artifact was hiding (2026-10-16)
+
+Two known-AI Instagram reels were reading `AUTHENTIC_HUMAN` (19 and 16). Tiling each clip into **all** of its consecutive 32-frame windows and scoring every one with the same layers the verdict uses showed the detector was not blind — it was **looking in the wrong place**: one reel collapses its coherence floor to `0.00` (the calibrated 62 signature) in 5 of its 8 windows, while the single shot-aware window the pipeline analyzed happened to be one of the healthy ones (`p05 = 0.65`); the other fires the temporal-residual probe in 9 of its 14 windows.
+
+Every server-side video scan now also runs a **coverage sweep**: up to 8 consecutive windows across the first 384 frames (`VIDEO_COVERAGE_MAX_FRAMES`, `VIDEO_COVERAGE_MAX_WINDOWS`), each scored by PwTF-DVD and the temporal-residual probe. The result is reported in the verdict as `temporal_coverage` (per-window records plus `flagged` / `analyzed` / `flagged_frac` / `collapse_windows` / `tr_windows`), and the sweep deliberately does **not** feed the existing escalation paths, so previously calibrated verdicts do not move.
+
+**The honest limit, measured at the same time:** repeated collapse is not unique to generated clips. The repo's own real reference clip collapses in 6 of its 15 windows and fires the residual probe in 4 (67% of windows) — more than any other real negative — and a window-by-window comparison of coherence floor, spectral flatness, residual autocorrelation, residual whiteness, temporal variance, D3 volatility and interframe motion found **no statistic that separates the two missed reels from it**. So escalation from repeated coverage is explicitly opt-in:
+
+| `COVERAGE_MODE` | repeated evidence (≥ 3 windows and ≥ 50%) | measured cost |
+|---|---|---|
+| `review` (**default**) | floors the verdict at **INCONCLUSIVE** — no longer "authentic", not accused of being AI | none on the real clips (they stay authentic) |
+| `flag` | floors at **69 SUSPICIOUS** (capped 79, never SYNTHETIC_AI) | the repo's real reference clip also becomes SUSPICIOUS |
+| `off` | rule disabled | — |
+
+The sweep costs extra temporal work per scan (~+15-25 s on a 720×1280 15 s reel with the shipped defaults); lower `VIDEO_COVERAGE_MAX_WINDOWS` or use `COVERAGE_MODE=off` on a latency-constrained deployment.
+
+## Audio track: a separate axis, reported and never scored (A0)
+
+Video scans also decode and measure the clip's **audio track** (`forensics/audio_track.py`, phase A0 of [`docs/audio-and-lip-sync-plan.md`](docs/audio-and-lip-sync-plan.md)). It decodes mono float32 at 48 kHz with ffmpeg — from the **same bytes the frames came from**, so a link scan never downloads the clip twice — and reports the result in the verdict as an `audio` block plus plain-language lines in `reasons`.
+
+**It never votes.** A synthetic voice over real footage is an *audio-AI* finding, not a deepfake video, so audio is a separate axis: `audio.score` is always `null`, it never appears in `breakdown`/`layers_active`, and no audio condition can move the video tier. It abstains with a reason when there is nothing to decode (client-extracted frames carry no container audio; a video-only download or a silent clip has no stream).
+
+What it reports: duration, sample rate, loudness (RMS/peak dBFS), active/silent frame fractions, zero-crossing rate, **effective bandwidth** (99% energy), high-frequency share above 8/16 kHz, spectral centroid and flatness, loudness-envelope dynamics, and syllable-rate (2–8 Hz) modulation. `audio.kind` is `speech` / `nonspeech` / `silence` / `unavailable`.
+
+**Honest limits, by design:** `speech` comes from energy/periodicity heuristics (a swinging loudness envelope, 2–8 Hz modulation, energy in the 300–3400 Hz speech band), not a speech classifier — strongly rhythmic music can satisfy it, which is why a low tremolo tone with no speech-band energy is correctly reported as `nonspeech`. And a **narrow bandwidth is a lead, not evidence**: it is common in vocoder/TTS re-synthesis, but lossy music and older recordings share the signature (measured: a real local clip reads 3.2 kHz while an AI reel reads 1.4 kHz). Synthetic-speech *detection* (A3/A4 of the plan) and AV lip-sync (A1) are not implemented yet; they arrive behind flags after calibration on a real-vs-TTS corpus. Check the layer with `.venv/bin/python scripts/check_audio_track.py`.
 
 ## D3 second-order dynamics: metrics layer (ICCV 2025, direction-corrected)
 
@@ -257,6 +283,25 @@ curl http://localhost:5001/health
 ```
 
 The extension resolves the base URL from the cloud API setting (a trailing `/predict...` suffix is stripped), so both local (`http://localhost:5001`) and hosted (`https://...hf.space`) deployments work without extra config.
+
+### Detector tests (text / image / video)
+
+Three runnable test files exercise the real detector code over the repo's own corpus and print the score every detector returns:
+
+```bash
+.venv/bin/python tests/test_text.py     # StoryScope + DNA-DetectLLM scores
+.venv/bin/python tests/test_images.py   # /predict/image/deep fused score + tier
+.venv/bin/python tests/test_videos.py   # /predict/video/deep score + tier + PwTF p05
+```
+
+Each file runs **in-process by default** — it imports the Flask app and drives it through its test client, so no server process is needed — or against a running server with `--live http://localhost:5001`. Useful flags: `--ids <id,id>` for a subset, `--audit` (video: print the per-window temporal evidence), `--skip-instagram` (local clips only), `--remote-images` (also scan the registered Brave-proxy image URLs), and `--use-cache` (the default sends `no_cache=true`, so every verdict is freshly computed). `tests/test_text.py` needs no network; `tests/test_videos.py` resolves the Instagram posts with yt-dlp exactly like the extension does (browser-cookie fallback included).
+
+Corpus: `demo-samples/texts/` + the StoryScope evasion samples + the humanizer outputs (text), `tests/calibration_corpus/{ai,real}/` (images), and `test videos/` plus the Instagram posts registered in `tests/detector_assets.json` and `tests/media_test_assets.json` (videos — the latter holds the 30 added links; `ig-DecK8wQPTM7` is labelled `human` there because the user confirmed it is authentic). Each run prints a per-asset score line and a `SCORES` recap, and merges the raw evidence (scores, tiers, PwTF/window metrics, reasons) into `tests/media_test_results.json`. The exit status is 0 only when no labeled asset FAILs and nothing errored; assets that are deliberately unasserted (single frames extracted from generated reels) or unlabeled are reported **score-only**.
+
+Current known reds, kept visible on purpose:
+
+- `demo-samples/texts/human-written.txt` reads ~79 (AI) under StoryScope's offline heuristic engine while DNA-DetectLLM reads ~23 (human) — a short, non-narrative post, i.e. the input the heuristic caveats above warn about.
+- `ig-DecC6x-zvBF` and `ig-DecPhb-iBFr` (AI) read `40 INCONCLUSIVE` under the default `COVERAGE_MODE=review`: the coverage sweep proves they carry the temporal signature (3/5 and 7/8 windows), but the same signature appears on real reference footage, so they are reported as needing review rather than as AI. Run with `COVERAGE_MODE=flag` and both read `69 SUSPICIOUS` (the local real reference clip then also flags — see the coverage-sweep section).
 
 ### Extension dev tools
 

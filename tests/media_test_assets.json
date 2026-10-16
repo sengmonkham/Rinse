@@ -1,0 +1,299 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "_readme": [
+    "Asset registry for the dedicated modality tests: tests/test_text.py,",
+    "tests/test_images.py and tests/test_videos.py.",
+    "",
+    "This file holds the assets those tests add on top of what already lives in",
+    "the repo (tests/detector_assets.json, tests/calibration_corpus/, 'test videos/',",
+    "demo-samples/texts/). It is kept separate from tests/detector_assets.json so",
+    "adding assets here does not silently widen the scope of",
+    "scripts/regression_check.py (which scans that file).",
+    "",
+    "Schema per entry:",
+    "  id        stable test id (printed in every run)",
+    "  label     'ai' | 'human'   ground truth the verdict is checked against",
+    "  kind      'video' (social post resolved with yt-dlp, or a direct media URL)",
+    "  source    free-text provenance of the asset",
+    "  url       the post/page URL",
+    "  note      what the clip is, as reported by the user who supplied it",
+    "",
+    "'label' is the expected class for the PASS/FAIL column. Every entry was",
+    "supplied as an AI-generated clip, except ig-DecK8wQPTM7: the user was unsure",
+    "about that one and later confirmed it IS authentic (Instagram labels it AI,",
+    "the detector reads it authentic too), so it is labeled 'human' and its note",
+    "records the confirmation."
+  ],
+  "videos": [
+    {
+      "id": "ig-DeINdluzjn5",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DeINdluzjn5",
+      "url": "https://www.instagram.com/p/DeINdluzjn5/",
+      "note": "Epstein AI video with an old-film filter"
+    },
+    {
+      "id": "ig-DegUdkFAiJd",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DegUdkFAiJd",
+      "url": "https://www.instagram.com/p/DegUdkFAiJd/",
+      "note": "Elon with a lizard"
+    },
+    {
+      "id": "ig-DdokS-yvm_7",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DdokS-yvm_7",
+      "url": "https://www.instagram.com/p/DdokS-yvm_7/",
+      "note": "Trump with giants"
+    },
+    {
+      "id": "ig-DeZZ28JAr1O",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DeZZ28JAr1O",
+      "url": "https://www.instagram.com/p/DeZZ28JAr1O/",
+      "note": "Epstein with aliens"
+    },
+    {
+      "id": "ig-DecK8wQPTM7",
+      "label": "human",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DecK8wQPTM7",
+      "url": "https://www.instagram.com/p/DecK8wQPTM7/",
+      "note": "UNSURE at first (Instagram labels it AI) - user confirmed 2026-10-16 it is authentic"
+    },
+    {
+      "id": "ig-DcY4eWusAHG",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DcY4eWusAHG",
+      "url": "https://www.instagram.com/p/DcY4eWusAHG/",
+      "note": "Dino farm AI video"
+    },
+    {
+      "id": "ig-DeauI04PdbJ",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DeauI04PdbJ",
+      "url": "https://www.instagram.com/p/DeauI04PdbJ/",
+      "note": "AI ad"
+    },
+    {
+      "id": "ig-DdPk4SNTMva",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DdPk4SNTMva",
+      "url": "https://www.instagram.com/p/DdPk4SNTMva/",
+      "note": "AI hamster tunnel"
+    },
+    {
+      "id": "ig-DecifCGS74l",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DecifCGS74l",
+      "url": "https://www.instagram.com/p/DecifCGS74l/",
+      "note": "Hyena video"
+    },
+    {
+      "id": "ig-DeaLEdGJg7J",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DeaLEdGJg7J",
+      "url": "https://www.instagram.com/p/DeaLEdGJg7J/",
+      "note": ""
+    },
+    {
+      "id": "ig-DedtLjlzFde",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DedtLjlzFde",
+      "url": "https://www.instagram.com/p/DedtLjlzFde/",
+      "note": ""
+    },
+    {
+      "id": "ig-DecC6x-zvBF",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DecC6x-zvBF",
+      "url": "https://www.instagram.com/p/DecC6x-zvBF/",
+      "note": ""
+    },
+    {
+      "id": "ig-DecWuMLP09-",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DecWuMLP09-",
+      "url": "https://www.instagram.com/p/DecWuMLP09-/",
+      "note": ""
+    },
+    {
+      "id": "ig-DecPhb-iBFr",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DecPhb-iBFr",
+      "url": "https://www.instagram.com/p/DecPhb-iBFr/",
+      "note": ""
+    },
+    {
+      "id": "ig-DeYtYl5xfeY",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DeYtYl5xfeY",
+      "url": "https://www.instagram.com/p/DeYtYl5xfeY/",
+      "note": ""
+    },
+    {
+      "id": "ig-DeJnp2ZkbLF",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DeJnp2ZkbLF",
+      "url": "https://www.instagram.com/p/DeJnp2ZkbLF/",
+      "note": ""
+    },
+    {
+      "id": "ig-DeZj-M-xcMk",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DeZj-M-xcMk",
+      "url": "https://www.instagram.com/p/DeZj-M-xcMk/",
+      "note": ""
+    },
+    {
+      "id": "ig-DeZyTL0t2Yi",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DeZyTL0t2Yi",
+      "url": "https://www.instagram.com/p/DeZyTL0t2Yi/",
+      "note": ""
+    },
+    {
+      "id": "ig-DeWNa25MgzR",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DeWNa25MgzR",
+      "url": "https://www.instagram.com/p/DeWNa25MgzR/",
+      "note": ""
+    },
+    {
+      "id": "ig-DeYXdryix3c",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DeYXdryix3c",
+      "url": "https://www.instagram.com/p/DeYXdryix3c/",
+      "note": ""
+    },
+    {
+      "id": "ig-DeZfJzTpZ41",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DeZfJzTpZ41",
+      "url": "https://www.instagram.com/p/DeZfJzTpZ41/",
+      "note": ""
+    },
+    {
+      "id": "ig-DY2n0nHqbnq",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram (reel path)",
+      "shortcode": "DY2n0nHqbnq",
+      "url": "https://www.instagram.com/reel/DY2n0nHqbnq/",
+      "note": ""
+    },
+    {
+      "id": "ig-Dd1_ZVRTZyU",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram (reels path)",
+      "shortcode": "Dd1_ZVRTZyU",
+      "url": "https://www.instagram.com/reels/Dd1_ZVRTZyU/",
+      "note": ""
+    },
+    {
+      "id": "ig-DegRcEhS8Wt",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DegRcEhS8Wt",
+      "url": "https://www.instagram.com/p/DegRcEhS8Wt/",
+      "note": "AI-generated Genshin video"
+    },
+    {
+      "id": "ig-Deg4YFuJ2Hg",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "Deg4YFuJ2Hg",
+      "url": "https://www.instagram.com/p/Deg4YFuJ2Hg/",
+      "note": ""
+    },
+    {
+      "id": "ig-DegtwjolEEj",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DegtwjolEEj",
+      "url": "https://www.instagram.com/p/DegtwjolEEj/",
+      "note": ""
+    },
+    {
+      "id": "ig-DegiB46ohVZ",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DegiB46ohVZ",
+      "url": "https://www.instagram.com/p/DegiB46ohVZ/",
+      "note": ""
+    },
+    {
+      "id": "ig-DehdJLKIj3v",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DehdJLKIj3v",
+      "url": "https://www.instagram.com/p/DehdJLKIj3v/",
+      "note": ""
+    },
+    {
+      "id": "ig-Defu2RgPqlX",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "Defu2RgPqlX",
+      "url": "https://www.instagram.com/p/Defu2RgPqlX/",
+      "note": ""
+    },
+    {
+      "id": "ig-DehZFGCkfZg",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DehZFGCkfZg",
+      "url": "https://www.instagram.com/p/DehZFGCkfZg/",
+      "note": ""
+    }
+  ]
+}

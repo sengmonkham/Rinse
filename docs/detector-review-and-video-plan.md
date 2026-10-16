@@ -82,6 +82,136 @@
   the real `cache/scan_cache.db` (including forced verdicts). It asserts the
   isolation before touching anything.
 
+### VIDEO — temporal coverage sweep (2026-10-16, from the 30-link run)
+
+The 30-link run above left 3 AI reels undetected. The user confirmed **one of
+them is genuinely authentic** (`ig-DecK8wQPTM7` — so that miss was CORRECT and
+the asset is now labelled `human`), leaving two real misses: `ig-DecC6x-zvBF`
+(19) and `ig-DecPhb-iBFr` (16) — one "with AI artifacts", one fully generated.
+
+**Root cause found by measurement, not threshold-guessing.** Every clip was
+decoded at native fps and tiled into ALL its consecutive 32-frame windows
+(no overlap, whole clip), scoring each window with the same layers the verdict
+uses:
+
+| clip | truth | windows | p05 collapse | tr fire | flagged |
+|---|---|---|---|---|---|
+| `DecC6x-zvBF` | AI (artifacts) | 8 | **5** | 0 | 62% |
+| `DecPhb-iBFr` | AI (generated) | 14 | **2** | **9** | 79% |
+| `DecK8wQPTM7` | authentic | 7 | 0 | 2 | 29% |
+| `DdgYCT5B6mn` (repo real post) | real | 7 | 1 | 0 | 14% |
+| local vid2/vid3 (repo real) | real | 18 | **2** | 2 | 22% |
+| `DdPk4SNTMva` (flagged AI) | AI | 18 | 0 | 18 | 100% |
+| local vid1 (repo AI) | AI | 5 | 5 | 0 | 100% |
+
+**The artifacts were never hidden from the detector — the detector never looked
+at them.** `ig-DecC6x-zvBF` collapses its coherence floor to 0.00 in 5 of its 8
+windows (which the calibrated rule already scores 62), but the pipeline's
+single shot-aware window happened to be one of the healthy ones (p05 0.65).
+The fix is coverage, not a lower threshold.
+
+**Honest limit measured at the same time:** repeated collapse is NOT unique to
+generated clips. The repo's own real reference clip (vid2/vid3, 900x720, 24.7 s)
+collapses in 6 of 15 windows and fires the residual probe in 4 (10/15 = 67%) —
+more than every other real negative. Window-by-window comparison of p05,
+flatness, residual autocorrelation, residual whiteness, temporal variance, D3
+volatility and interframe motion found **no separating statistic**: in this
+metric space the two missed reels are indistinguishable from that real clip.
+Escalating repeated coverage to SUSPICIOUS would therefore produce a false AI
+accusation on 1 of the 2 unique real reference clips.
+
+**What shipped** (`server.py` `_temporal_coverage_sweep`, `forensics/voter.py`):
+
+1. **Coverage sweep** — every server-side video scan now also tiles up to 8
+   consecutive windows across the first 384 frames (env: `VIDEO_COVERAGE_MAX_FRAMES`
+   / `VIDEO_COVERAGE_MAX_WINDOWS`), scores each with PwTF-DCD and the
+   temporal-residual probe, and reports the result in the verdict as
+   `temporal_coverage` (per-window records + `flagged` / `analyzed` /
+   `flagged_frac` / `collapse_windows` / `tr_windows`). It does NOT feed the
+   existing escalation paths, so no previously-calibrated verdict moves.
+2. **Repeated-evidence rule** (`COVERAGE_MODE`) — when the evidence repeats
+   (>= 3 flagged windows AND >= 50% of the swept windows):
+   - `review` (**default**): floor the score at 40 → **INCONCLUSIVE**. The
+     detector stops calling the clip authentic (the reported failure) without
+     accusing real footage of being AI.
+   - `flag`: floor 69, cap 79 → **SUSPICIOUS** (never SYNTHETIC_AI on temporal
+     evidence). Recall-first; measured cost = vid2/vid3 also become SUSPICIOUS.
+   - `off`: rule disabled.
+
+**Measured effect on the local set (default `review`, cache bypassed):**
+
+| clip | before | after |
+|---|---|---|
+| `DecC6x-zvBF` (AI) | 19 AUTHENTIC_HUMAN | **40 INCONCLUSIVE** + coverage reason (3/5 windows) |
+| `DecPhb-iBFr` (AI) | 16 AUTHENTIC_HUMAN | **40 INCONCLUSIVE** + coverage reason (7/8 windows) |
+| `DecK8wQPTM7` (authentic) | 24 AUTHENTIC_HUMAN | 24 AUTHENTIC_HUMAN (1/5 = 20%) |
+| real IG post | 12 AUTHENTIC_HUMAN | 12 AUTHENTIC_HUMAN (2/5 = 40%) |
+| local vid2 / vid3 (real) | 15 AUTHENTIC_HUMAN | **40 INCONCLUSIVE** (5/8 = 63%) |
+| local vid1 (AI) | 66 SUSPICIOUS | 66 SUSPICIOUS |
+| `DdPk4SNTMva` (AI) | 69 SUSPICIOUS | 69 SUSPICIOUS |
+
+Full-corpus confirmation (36 Instagram assets, `no_cache`, defaults): **34 pass /
+2 fail, 0 errors** — every one of the 27 previously-flagged reels still flags
+(66-79 SUSPICIOUS, unchanged), both human-labelled posts stay`AUTHENTIC_HUMAN`
+(real post 12, the user-confirmed authentic reel 24), and the only two
+failures are the two genuine misses, now `40 INCONCLUSIVE` instead of
+`AUTHENTIC_HUMAN`. With `COVERAGE_MODE=flag`, measured on the same clips: both
+misses read **69 SUSPICIOUS**, the authentic reel and the real post stay
+`AUTHENTIC_HUMAN` (24 / 12), and the real reference clip vid2 reads 69 — i.e.
+recall 2/2 on this pair bought at the cost of one known real-video false
+positive.
+
+So: the two misses are no longer reported as authentic, and with
+`COVERAGE_MODE=flag` they read SUSPICIOUS — at the documented cost of also
+flagging the repo's real reference clip. The remaining honest gap is a
+*discriminating* statistic for this class (the plan's Phase 2c learned temporal
+layer, or semantic-encoder features); coverage alone cannot separate them,
+and this document does not claim otherwise.
+
+**Latency:** the sweep adds temporal work per scan (measured worst case on a
+720x1280 15 s reel: +40 s with 13 tiles; with the shipped defaults, ~+15-25 s).
+Dial `VIDEO_COVERAGE_MAX_WINDOWS` down or set `COVERAGE_MODE=off` on a latency-
+constrained deployment; Phase 4 (parallel layers) is the real fix.
+
+### Harness — dedicated modality tests + a 30-link Instagram run (2026-10-16)
+
+New runnable tests (no pytest needed): `tests/test_text.py`,
+`tests/test_images.py`, `tests/test_videos.py`, sharing
+`tests/media_test_common.py`. Each runs in-process (Flask test client, no server
+process) or against a live server (`--live`), prints every detector score, and
+merges the raw evidence into `tests/media_test_results.json`. The video corpus
+is `test videos/` + the registered `tests/detector_assets.json` posts + the 30
+AI-labeled Instagram links in the new `tests/media_test_assets.json`. Run with
+`--skip-instagram` for local-only, or `--ids` for a subset.
+
+**Measured (2026-10-16, `no_cache`, in-process):**
+
+| suite | result |
+|---|---|
+| video (39 assets) | **36 pass / 3 miss**, 0 error |
+| image (22 assets) | 14 pass (3 AI stills 70-92, 11 real photos 12-38), 8 score-only reel frames (17-41) |
+| text (12 assets) | 8 pass / 1 fail, 3 score-only humanizer outputs |
+
+- **Video negatives are clean:** local vid2/vid3 read 15 `AUTHENTIC_HUMAN`
+  (p05 0.51) and the registered real post `ig-human-post-01` reads 12 — no false
+  positive on any real clip in this set. All 27 flagged new links landed in the
+  SUSPICIOUS band (66-79 — no SYNTHETIC_AI), and **18 of the 39 assets fired
+  the `tr` probe at 62, 13 of them with a healthy PwTF coherence floor (p05
+  0.43-0.83)**: the P1 temporal-residual vote is carrying clips whose coherence
+  floor never collapses, which is precisely what it was promoted for.
+- **The 3 misses are honest, not test bugs** — all AI, none carrying caption
+  provenance, all temporally self-consistent: `ig-DecK8wQPTM7` 24,
+  `ig-DecC6x-zvBF` 19, `ig-DecPhb-iBFr` 16, each with p05 0.55-0.74 and no `tr`
+  fire. Notably `ig-DecK8wQPTM7` is the clip the user doubted: **the detector
+  agrees with the user, not Instagram's own AI label.** These are exactly the
+  full-scene self-consistent class the plan's Phase 2 (face-temporal / learned
+  temporal) targets.
+- **Text:** the one failure is
+  `demo-samples/texts/human-written.txt` reading 79 under StoryScope's offline
+  heuristic engine (DNA-DetectLLM reads 23) — a measured FP on a short
+  non-narrative post, i.e. the input the README's heuristic caveats warn about;
+  it is kept asserted so the FP stays visible.
+
 **Verification:** baseline `/tmp/rinse_before.json` vs after `/tmp/rinse_after.json`:
 19 image verdicts changed (all in the intended direction), 0 video verdicts
 changed, AI stills recall preserved. Modules import cleanly; `WORK_RES`/`
@@ -231,11 +361,18 @@ tiers, and a two-axis `alteration` / `ai_artifact` output. A SQLite
   weakness beyond that; text is genuinely the mature modality.
 
 ### 2.4 Harness / hygiene
-- `tests/` contains only JSON artifacts and image corpora — **no runnable
-  Python test files** (`tests/*.py` is empty). Verification lives in
-  `scripts/regression_check.py` + `scripts/smoke_cache.py`. The regression JSON
-  stores only final score/tier, not the per-layer evidence, which makes a
-  failure hard to diagnose without a re-run.
+- ~~`tests/` contains only JSON artifacts and image corpora — **no runnable
+  Python test files** (`tests/*.py` is empty).~~ **Partly fixed 2026-10-16:**
+  `tests/test_text.py`, `tests/test_images.py` and `tests/test_videos.py` are
+  runnable, print every score, and persist the raw per-asset evidence
+  (scores, tiers, PwTF/window metrics, reasons) to
+  `tests/media_test_results.json`. They run in-process (Flask test client) or
+  against a live server (`--live`), share `tests/media_test_common.py`, and
+  take their video corpus from `test videos/`, `tests/detector_assets.json`
+  and the new `tests/media_test_assets.json` (30 AI-labeled Instagram links).
+  Verification still largely lives in `scripts/regression_check.py` +
+  `scripts/smoke_cache.py`; `scripts/regression_check.py`'s JSON still stores
+  only the final score/tier.
 - No CI gating; nothing forces the eval table to be attached to a threshold
   change.
 
@@ -480,7 +617,22 @@ Provide the URLs/files that still slip through. Recall can only be pushed
 further by calibrating against real examples; the honest path is
 `VIDEO_STRICT` levels + a real-reel corpus, not a promise of zero misses.
 
-## 7. File map
+## 7. Related: audio & lip-sync plan
+
+A separate plan for adding **audio-only synthetic-speech detection** and
+**audio-visual lip-sync** evidence to the video stack lives in
+[`docs/audio-and-lip-sync-plan.md`](audio-and-lip-sync-plan.md). Key honesty
+invariant there: AI-generated *audio* is not AI-generated *video*, so it is a
+separate `audio_ai` axis, not a vote that flips the video tier.
+
+**Phase A0 is implemented** (2026-10-12): `forensics/audio_track.py` decodes the
+clip's audio from the same bytes the frames came from and reports loudness,
+bandwidth, speech-band and envelope/syllable statistics in the verdict's
+`audio` block and `reasons` — metrics-only, `score: None`, never in
+`breakdown`, so no verdict moves (verified: 0/25 changed). See
+§6 of the audio plan for the measured numbers and the weak narrow-band lead.
+
+## 8. File map
 
 | file | change |
 |---|---|
@@ -494,3 +646,5 @@ further by calibrating against real examples; the honest path is
 | `server.py` | Phase 3 five-frame spatial; Phase 4 parallelism/adaptive |
 | `tests/detector_assets.json`, `tests/calibration_corpus/real/` | Phase 0 corpus (videos) |
 | `forensics/eval_video.py` | Phase 0 harness (new) |
+| `forensics/audio_track.py` | Audio-family A0 (new, metrics-only) |
+| `scripts/check_audio_track.py` | A0 behavioural gate (new) |

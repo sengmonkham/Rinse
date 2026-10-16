@@ -20,6 +20,46 @@ from typing import Dict, Any, List, Optional
 # expanded real-reel corpus validates the thresholds.
 TR_VOTE = os.environ.get("TR_VOTE", "1") not in ("0", "false", "no")
 
+# --- Repeated temporal convergence across the coverage sweep (2026-10-16) ---
+# Two known-AI Instagram reels were read as AUTHENTIC_HUMAN (score 19 / 16).
+# Investigating them (exhaustive 32-frame tiling of every window in the clip,
+# measured 2026-10-16) showed the artifacts were real AND the calibrated rules
+# already fire on them - in windows the pipeline never looked at: one reel
+# collapses its coherence floor in 5 of its 8 windows while the single window
+# analyzed read a healthy p05 = 0.65; the other fires the temporal-residual
+# probe in 9 of its 14 windows while the analyzed window read clean.
+#
+# So the fix is coverage plus repetition, not a lower threshold. server.py sweeps
+# the clip (`_temporal_coverage_sweep`) and reports how many swept windows carry
+# a coherence collapse or a temporal-residual fire; this rule escalates only when
+# that evidence REPEATS - >= 3 flagged windows AND >= 50% of the swept windows -
+# because an ISOLATED collapsed window is normal on real footage (measured: a real
+# clip collapsed 2 of 18 windows, another 1 of 7, and the authentic reel the user
+# identified fired tr in 2 of 7 = 29%). The >= 3 floor matters: the measured real
+# clips never reach three flagged windows.
+# HOWEVER - measured on the repo's own reference clips - the same repeated
+# collapse also occurs on REAL footage: local vid2/vid3 (labelled real) collapse
+# 6 of 15 swept windows and fire the residual probe in 4, i.e. 10/15 = 67% - more
+# than every real negative the repo has. In this metric space the two missed
+# reels are NOT separable from that real clip (per-window p05, flatness, ac1,
+# residual whiteness, temporal variance, D3 volatility and motion were all
+# compared window by window; every distribution overlaps). Escalating repeated
+# coverage to SUSPICIOUS therefore costs a false AI accusation on 1 of the 2
+# unique real reference clips - so it is NOT the default.
+#
+#   COVERAGE_MODE=review (default) - repeated evidence floors the verdict at
+#                                    INCONCLUSIVE: the detector stops calling
+#                                    the clip authentic (the reported failure)
+#                                    without accusing real footage of being AI.
+#   COVERAGE_MODE=flag               - recall-first: repeated evidence reaches
+#                                    the SUSPICIOUS band (floor 69, cap 79 -
+#                                    never SYNTHETIC_AI on temporal evidence).
+#                                    Measured cost: vid2/vid3 become SUSPICIOUS.
+#   COVERAGE_MODE=off                - disable the rule entirely.
+COVERAGE_MODE = os.environ.get("COVERAGE_MODE", "review").strip().lower()
+if COVERAGE_MODE not in ("off", "review", "flag"):
+    COVERAGE_MODE = "review"
+
 # Video STRICT mode: bias hard toward recall (catch every AI clip) at the cost
 # of false positives on real video. Adds two escalation paths that fire on
 # weak-but-real temporal anomalies:
@@ -647,6 +687,50 @@ def fuse_ensemble_verdict(
             raw_score = max(raw_score, 69.0)
         raw_score = min(raw_score, 79.0)
 
+    # Repeated temporal convergence across the coverage sweep (see COVERAGE_MODE
+    # above). The primary window's calibrated escalation paths are untouched, so
+    # existing detections keep their verdicts; this rule only fires on evidence
+    # that repeats across the clip. In `flag` mode the floor is 69 (>= 69 always
+    # reads SUSPICIOUS regardless of confidence, and temporal-family evidence
+    # never reaches SYNTHETIC_AI: cap 79); in the default `review` mode the floor
+    # is 40, which lands in the INCONCLUSIVE band - "not authentic, not proven
+    # AI" - the honest verdict for evidence that also appears on real footage.
+    coverage_reasons: List[str] = []
+    if COVERAGE_MODE != "off" and is_video and not authenticity_override and raw_score < 80:
+        cov = (extra_data or {}).get("temporal_coverage") or {}
+        try:
+            cov_n = int(cov.get("analyzed") or 0)
+            cov_flagged = int(cov.get("flagged") or 0)
+            cov_frac = float(cov.get("flagged_frac") or 0.0)
+        except (TypeError, ValueError):
+            cov_n = cov_flagged = 0
+            cov_frac = 0.0
+        if cov_n >= 4 and cov_flagged >= 3 and cov_frac >= 0.5:
+            if COVERAGE_MODE == "flag":
+                raw_score = min(max(raw_score, 69.0), 79.0)
+                mode_note = (
+                    "COVERAGE_MODE=flag treats repeated evidence as suspicious. "
+                    "This also flags real footage with the same statistics (measured: local "
+                    "vid2/vid3 collapse 6 of 15 windows) - prefer review mode unless recall is "
+                    "worth that false positive."
+                )
+            else:
+                raw_score = max(raw_score, 40.0)   # INCONCLUSIVE band, never AUTHENTIC
+                mode_note = (
+                    "Not escalated to an AI verdict: the same repeated signature also appears on "
+                    "real reference footage, so this clip is reported as needing review instead of "
+                    "being called authentic or AI (set COVERAGE_MODE=flag for the recall-first "
+                    "behavior)."
+                )
+            coverage_reasons.append(
+                f"Temporal coverage sweep: generation-style temporal evidence repeats across "
+                f"the clip - {cov_flagged} of {cov_n} swept windows show a coherence-floor "
+                f"collapse or a temporal-residual fire ({cov_frac:.0%}; "
+                f"{cov.get('collapse_windows', 0)} collapse / {cov.get('tr_windows', 0)} residual). "
+                f"An isolated collapsed window is normal on real footage; this is not isolated. "
+                + mode_note
+            )
+
     # STRICT-mode escalations (recall-first; see VIDEO_STRICT note at the top).
     # Applied last so they can lift a clip the calibrated paths left low. They
     # can reach the SUSPICIOUS band but are capped below 80 (never SYNTHETIC_AI
@@ -782,11 +866,16 @@ def fuse_ensemble_verdict(
 
     # Consolidate reasons - watermark/manifest/spatial forensics first; the
     # temporal layers last, since on video they are supplementary evidence.
-    # rppg reasons are surfaced here too (applies/pulse_present readouts).
+    # rppg reasons are surfaced here too (applies/pulse_present readouts), and
+    # so are the audio-track findings (docs/audio-and-lip-sync-plan.md phase
+    # A0): audio is a SEPARATE axis with score None, so listing its lines here
+    # reports the evidence without contributing a single point to the score -
+    # audio evidence is surfaced, never silently ignored, and never a vote.
     all_reasons: List[str] = []
-    for k in ["c2pa", "synthid", "metadata", "neural", "frequency", "spai", "pwtf", "temporal", "d3", "rppg"]:
+    for k in ["c2pa", "synthid", "metadata", "neural", "frequency", "spai", "pwtf", "temporal", "d3", "rppg", "audio"]:
         if k in layer_reasons and layer_reasons[k]:
             all_reasons.extend(layer_reasons[k])
+    all_reasons.extend(coverage_reasons)
 
     # ---- Two-axis output: altered vs AI-artifact ----
     # Keep the legacy single-score fusion above for backward compatibility, but

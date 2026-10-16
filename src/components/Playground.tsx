@@ -156,6 +156,38 @@ interface ImageAnalysisResults {
     curvature_std_deg?: number;
     path_efficiency?: number;
   };
+  // Audio track (video only; docs/audio-and-lip-sync-plan.md phase A0).
+  // Reported on its own axis and NEVER scored against the video tier, so
+  // `score` is always null - it is evidence readout, not a vote.
+  audio?: {
+    score?: number | null;
+    active?: boolean;
+    applies?: boolean;
+    kind?: 'speech' | 'nonspeech' | 'silence' | 'unavailable';
+    has_speech?: boolean | null;
+    duration_s?: number | null;
+    sample_rate_hz?: number | null;
+    metrics?: {
+      duration_s?: number;
+      sample_rate_hz?: number;
+      rms_dbfs?: number;
+      peak_dbfs?: number;
+      active_fraction?: number;
+      silence_fraction?: number;
+      zero_crossing_rate_mean?: number;
+      bandwidth_hz_99?: number;
+      hf_share_8k?: number;
+      hf_share_16k?: number;
+      speech_band_share?: number;
+      spectral_centroid_hz?: number;
+      spectral_flatness_mean?: number;
+      envelope_cv?: number;
+      syllabic_energy_share?: number;
+      syllabic_peak_hz?: number;
+      frames_analyzed?: number;
+    };
+    reasons?: string[];
+  };
 }
 
 interface StoryScopeDimension {
@@ -2191,6 +2223,28 @@ export default function Playground({ settings }: PlaygroundProps) {
                     </div>
                     <div style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>
                       trajectory volatility · region {(videoResults.d3_metrics.region_volatility_mean ?? 0).toFixed(2)} · metrics only
+                    </div>
+                  </div>
+                )}
+                {videoResults.audio?.active && (
+                  <div className="glass" style={{ padding: '10px' }}>
+                    <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>AUDIO TRACK · REPORTED, NOT SCORED</div>
+                    <div style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-secondary)' }}>
+                      {videoResults.audio.kind ?? '—'}
+                    </div>
+                    <div style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>
+                      {(videoResults.audio.duration_s ?? 0).toFixed(1)}s ·{' '}
+                      bandwidth {(((videoResults.audio.metrics?.bandwidth_hz_99 ?? 0) / 1000)).toFixed(1)} kHz ·{' '}
+                      {(((videoResults.audio.metrics?.hf_share_8k ?? 0) * 100)).toFixed(1)}% above 8 kHz
+                    </div>
+                  </div>
+                )}
+                {videoResults.audio && videoResults.audio.active === false && (
+                  <div className="glass" style={{ padding: '10px' }}>
+                    <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>AUDIO TRACK · NOT ANALYZED</div>
+                    <div style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-muted)' }}>n/a</div>
+                    <div style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>
+                      {videoResults.audio.reasons?.[0] ?? 'No audio track available.'}
                     </div>
                   </div>
                 )}
