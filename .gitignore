@@ -50,3 +50,6 @@ deploy/space_stage/*
 # Local manual detector test clips (not part of the repo)
 test videos/
 
+# Azure deploy state (holds the generated API key + registry name)
+deploy/azure/.azure-state.env
+

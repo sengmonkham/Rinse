@@ -60,6 +60,36 @@ COVERAGE_MODE = os.environ.get("COVERAGE_MODE", "review").strip().lower()
 if COVERAGE_MODE not in ("off", "review", "flag"):
     COVERAGE_MODE = "review"
 
+# --- Repeated DEEP collapse + synthetic residual whiteness (2026-10-22) ---
+# The `review` floor above abstains because repeated *partial* collapse is
+# reproducible on real footage. Two stricter signatures are not:
+#
+# 1. REPEATED TOTAL COLLAPSE. A p05 < 0.10 coherence floor is the signature the
+#    primary-window rule already treats as decisive (`total_collapse` below).
+#    Measured on the 2026-10-22 set (32-frame windows, first 384 frames): the
+#    known-AI reels read 4/12 (ig-DeeYNdsMiqC) and 2/12 (ig-DeTtabsthXY) total-
+#    collapse windows, while the two user-confirmed authentic reels read 0/7 and
+#    1/7 - one isolated total collapse happens on real footage, two do not.
+# 2. SYNTHETIC RESIDUAL WHITENESS. A temporal-residual fire whose residual
+#    white-fraction is >= 0.55 (semi-independent per-frame synthesis leaves
+#    noise-like residuals). Measured residual white-fraction maxima per clip:
+#    AI 0.731 / 0.586 vs authentic 0.389 / 0.140 - a single window with that
+#    much white residual is outside the real-footage range on this set.
+#
+# Both costs are bounded like every other temporal path: floor 69 (the
+# suspicious band), cap 79, never SYNTHETIC_AI from a 128px thumbnail layer,
+# and both respect a confirmed camera/watermark authenticity override and
+# COVERAGE_MODE=off. Note on the ground truth: test videos/vid2.mp4 and
+# vid3.mp4 (byte-identical duplicates) were previously labelled real; they are
+# generated clips (object morphing, 24 fps render, burned-in captions) and are
+# now labelled AI - they hit the repeated-total-collapse rule, which is
+# consistent with the primary-window rule they would already trip if the
+# analyzed window were one of the collapsed ones.
+_COVERAGE_DEEP_P05 = 0.10
+_COVERAGE_DEEP_MIN_WINDOWS = 2
+_COVERAGE_WHITE_MIN = 0.55
+_COVERAGE_TR_FIRE_MIN = 60
+
 # Video STRICT mode: bias hard toward recall (catch every AI clip) at the cost
 # of false positives on real video. Adds two escalation paths that fire on
 # weak-but-real temporal anomalies:
@@ -729,6 +759,48 @@ def fuse_ensemble_verdict(
                 f"{cov.get('collapse_windows', 0)} collapse / {cov.get('tr_windows', 0)} residual). "
                 f"An isolated collapsed window is normal on real footage; this is not isolated. "
                 + mode_note
+            )
+
+    # Repeated DEEP collapse / residual whiteness across the coverage sweep (see
+    # the module-level note). Unlike the repeated-partial rule above these are
+    # NOT gated on COVERAGE_MODE=flag: they are outside the range the authentic
+    # clips in the corpus produce, so they escalate in the default mode too.
+    if COVERAGE_MODE != "off" and is_video and not authenticity_override and raw_score < 80:
+        cov_win = [
+            w for w in ((extra_data or {}).get("temporal_coverage") or {}).get("windows") or []
+            if isinstance(w, dict)
+        ]
+        deep = [
+            w for w in cov_win
+            if w.get("p05") is not None
+            and float(w["p05"]) < _COVERAGE_DEEP_P05
+            and (w.get("pwtf_score") or 0) >= 60
+        ]
+        white = [
+            w for w in cov_win
+            if (w.get("tr_score") or 0) >= _COVERAGE_TR_FIRE_MIN
+            and w.get("white") is not None
+            and float(w["white"]) >= _COVERAGE_WHITE_MIN
+        ]
+        if len(deep) >= _COVERAGE_DEEP_MIN_WINDOWS:
+            raw_score = min(max(raw_score, 69.0), 79.0)
+            coverage_reasons.append(
+                f"Temporal coverage sweep: total coherence-floor collapse (p05 < "
+                f"{_COVERAGE_DEEP_P05:g}) repeats in {len(deep)} of {len(cov_win)} swept windows. "
+                f"One collapsed window is normal on real footage; repeated total collapse is a "
+                f"structural regeneration signature (real reference reels measured 0 and 1 such "
+                f"windows). Reported as suspicious, capped below the synthetic tier because the "
+                f"temporal layer sees only a 128px grayscale thumbnail."
+            )
+        if white:
+            raw_score = min(max(raw_score, 69.0), 79.0)
+            best_white = max(float(w["white"]) for w in white)
+            coverage_reasons.append(
+                f"Temporal coverage sweep: synthetic residual whiteness - {len(white)} of "
+                f"{len(cov_win)} swept windows show a temporal-residual fire with "
+                f"{best_white:.0%} white (noise-like) residual, above the 0.55 range boundary "
+                f"(authentic reels measured at most 0.42). Semi-independent per-frame synthesis "
+                f"leaves residuals no physical scene model explains."
             )
 
     # STRICT-mode escalations (recall-first; see VIDEO_STRICT note at the top).

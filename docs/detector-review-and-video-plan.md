@@ -173,6 +173,30 @@ and this document does not claim otherwise.
 Dial `VIDEO_COVERAGE_MAX_WINDOWS` down or set `COVERAGE_MODE=off` on a latency-
 constrained deployment; Phase 4 (parallel layers) is the real fix.
 
+### Update 2026-10-22 — `vid2`/`vid3` relabelled; two stricter coverage rules scored
+
+The "real reference clip" above (`vid2`/`vid3`) is generated footage, not a
+real negative: the two files are byte-identical (one clip saved twice) and it
+shows object morphing (a pigeon becomes a pastry/rock between frames 83–154 at
+an unchanged hand pose), unmoored props, a 24 fps render and burned-in caption
+cards. `tests/test_videos.py` now labels both AI. That removes the one
+negative that forced repeated coverage to be opt-in, but it does not by itself
+make repeated *partial* collapse sound — so two signatures that the authentic
+reels never produce are now scored in the default mode (`forensics/voter.py`):
+
+| signature | measured AI | measured authentic | rule |
+|---|---|---|---|
+| total collapse (`p05 < 0.10`) repeating | 4/12, 2/12 windows | 0/7, 1/7 | ≥ 2 windows → floor 69 |
+| temporal-residual fire with residual white-fraction ≥ 0.55 | 0.73, 0.59 | ≤ 0.42 | any window → floor 69 |
+
+Both are capped at 79 (never SYNTHETIC_AI from the 128 px temporal layer),
+respect a confirmed camera/watermark override, and obey `COVERAGE_MODE=off`.
+Measured: the three reels that read `40 INCONCLUSIVE` on 2026-10-22
+(`ig-DeeYNdsMiqC`, `ig-DeTtabsthXY`, `ig-DeppmpCtSnZ`) now read **69
+SUSPICIOUS**; `ig-DecK8wQPTM7` (24) and `ig-human-post-01` (12) stay
+`AUTHENTIC_HUMAN`. The sweep reports `deep_collapse_windows` / `white_windows`
+and per-window `white` / `deep_collapse` so an audit can replay the decision.
+
 ### Harness — dedicated modality tests + a 30-link Instagram run (2026-10-16)
 
 New runnable tests (no pytest needed): `tests/test_text.py`,

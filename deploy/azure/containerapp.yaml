@@ -1,0 +1,103 @@
+# Azure Container Apps definition for the RINSE backend.
+#
+# This file is a TEMPLATE: deploy.sh substitutes every __PLACEHOLDER__ and
+# applies the result with `az containerapp create/update --yaml`. Do not edit
+# it by hand into a deployed state - keep the placeholders so re-deploys work.
+#
+# Why Container Apps and not App Service: the Flask app imports torch,
+# detectzoo, opencv and loads the CNNSpot weights at boot, which needs ~1 GB
+# RSS just to idle (measured locally) - App Service's always-free F1 tier and
+# the 12-month free B-series VMs are all 1 GiB RAM. Container Apps is the only
+# Azure target with an always-free grant that can hold 2 vCPU / 4 GiB.
+
+name: __APP_NAME__
+type: Microsoft.App/containerApps
+location: __LOCATION__
+resourceGroup: __RESOURCE_GROUP__
+properties:
+  managedEnvironmentId: __ENV_ID__
+  configuration:
+    activeRevisionsMode: Single
+    ingress:
+      external: true
+      targetPort: 5001            # server.py binds PORT (5001 below)
+      transport: auto
+      allowInsecure: false        # HTTPS only - the extension calls https://
+      traffic:
+        - latestRevision: true
+          weight: 100
+    secrets:
+      - name: api-key
+        value: __API_KEY__
+      - name: acr-password
+        value: __ACR_PASSWORD__
+    registries:
+      - server: __ACR_LOGIN_SERVER__
+        username: __ACR_USERNAME__
+        passwordSecretRef: acr-password
+  template:
+    containers:
+      - name: rinse
+        image: __IMAGE__
+        resources:
+          cpu: 2.0
+          memory: 4Gi
+        env:
+          # PORT is read by server.py; must match ingress.targetPort.
+          - name: PORT
+            value: "5001"
+          # Bearer token required by every /predict* endpoint.
+          - name: API_KEY
+            secretRef: api-key
+          # Offline StoryScope engine - no LLM key, no per-scan cost.
+          - name: STORYSCOPE_MODE
+            value: heuristic
+          # CNNSpot (280MB) is baked into the image by the repo Dockerfile.
+          - name: MODEL_NAME
+            value: cnnspot
+          # The SQLite scan cache lives on the replica's ephemeral disk; it
+          # survives requests but not restarts. Fine for a demo deployment.
+          - name: SCAN_CACHE
+            value: "1"
+          # Keep the coverage sweep's default review mode (a repeated temporal
+          # signature floors the verdict at INCONCLUSIVE instead of accusing).
+          - name: COVERAGE_MODE
+            value: review
+        # /health is unauthenticated (server.py) so probes work with API_KEY set.
+        # The startup probe is deliberately patient: torch + detectzoo + the
+        # 280MB CNNSpot weights take a while to come up on 2 vCPU.
+        probes:
+          - type: Startup
+            httpGet:
+              path: /health
+              port: 5001
+              scheme: HTTP
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 40     # up to ~10 min for a slow first boot
+          - type: Readiness
+            httpGet:
+              path: /health
+              port: 5001
+              scheme: HTTP
+            periodSeconds: 15
+            failureThreshold: 5
+          - type: Liveness
+            httpGet:
+              path: /health
+              port: 5001
+              scheme: HTTP
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 10
+    scale:
+      # 0 -> the app stops billing when idle, at the price of a cold start.
+      # Set minReplicas: 1 to keep it warm (fixes cold starts, burns the grant
+      # 24/7 - see README cost section).
+      minReplicas: 0
+      maxReplicas: 2
+      rules:
+        - name: http
+          http:
+            metadata:
+              concurrentRequests: "5"

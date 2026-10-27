@@ -14,10 +14,9 @@ tier, confidence, the PwTF-DD temporal coherence floor and the top reasons:
 
 Corpus:
 
-* ``test videos/*.mp4``               - the repo's local manual clips
-  (vid1 = AI, vid2/vid3 = real, per the measured table in
-  ``docs/detector-review-and-video-plan.md`` §6; any other local file is
-  reported score-only)
+* ``test videos/*.mp4``               - the repo's local manual clips (all
+  three are AI: vid1 is a generated talking head, vid2/vid3 are one generated
+  clip saved twice - see LOCAL_LABELS; any other local file is score-only)
 * ``tests/detector_assets.json``      - the Instagram posts already registered
   in the repo (video-kind entries)
 * ``tests/media_test_assets.json``    - the Instagram posts added with these
@@ -42,11 +41,20 @@ import media_test_common as h
 VIDEO_DIR = os.path.join(h.ROOT, "test videos")
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".m4v"}
 
-# Labels for the local manual clips (docs/detector-review-and-video-plan.md §6).
+# Labels for the local manual clips.
+#
+# vid2/vid3 were labelled 'human' in the earlier plan docs, but they are the
+# same file byte for byte (one clip saved twice) and it is generated footage:
+# the pigeon in the subject's hand morphs into a pastry/rock across frames
+# 83-154 while the hand pose is unchanged, props (motorcycle, chair, vacuum)
+# sit in the scene with no contact shadow or consistent perspective, the render
+# is 24 fps and it carries burned-in "believe anything / can be fake" captions.
+# Their repeated total coherence collapse (4 of 12 swept windows) is the same
+# signature the other generated reels show, so they are labelled AI.
 LOCAL_LABELS = {
     "vid1.mp4": "ai",
-    "vid2.mp4": "human",
-    "vid3.mp4": "human",
+    "vid2.mp4": "ai",
+    "vid3.mp4": "ai",
 }
 
 

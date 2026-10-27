@@ -123,6 +123,13 @@ _COVERAGE_MAX_FRAMES = int(os.environ.get("VIDEO_COVERAGE_MAX_FRAMES", "384"))
 _COVERAGE_MAX_WINDOWS = int(os.environ.get("VIDEO_COVERAGE_MAX_WINDOWS", "8"))
 _COVERAGE_COLLAPSE_P05 = 0.25   # same collapse threshold the pwtf escalation uses
 _COVERAGE_TR_MIN = 60           # temporal_residual fire threshold
+# A p05 this deep is the 'total collapse' the voter treats as decisive when it
+# happens once in the analyzed window; repeated occurrences across the sweep are
+# scored by voter.py (see its _COVERAGE_DEEP_P05 note).
+_COVERAGE_DEEP_P05 = 0.10
+# Residual-white-fraction floor above which a temporal-residual fire is the
+# synthetic-whiteness signature (authentic reels measured <= 0.42).
+_COVERAGE_WHITE_MIN = 0.55
 
 
 def _score_coverage_tile(frames, tr_mod):
@@ -133,6 +140,8 @@ def _score_coverage_tile(frames, tr_mod):
     pwtf_score = s_pwtf.get("score")
     s_tr = tr_mod.analyze_temporal_residual(frames) if tr_mod._NP_AVAILABLE else {}
     tr_score = s_tr.get("score")
+    tr_metrics = s_tr.get("metrics") or {}
+    white = tr_metrics.get("residual_white_frac")
     collapse = bool(
         pwtf_score is not None and pwtf_score >= 60
         and p05 is not None and p05 < _COVERAGE_COLLAPSE_P05
@@ -142,7 +151,14 @@ def _score_coverage_tile(frames, tr_mod):
         "pwtf_score": pwtf_score,
         "p05": p05,
         "tr_score": tr_score,
+        "white": white,
         "collapse": collapse,
+        # Deeper than the escalation's 0.25 collapse band - voter.py scores
+        # repetition of this one (see _COVERAGE_DEEP_P05).
+        "deep_collapse": bool(
+            pwtf_score is not None and pwtf_score >= 60
+            and p05 is not None and p05 < _COVERAGE_DEEP_P05
+        ),
         "tr_fire": tr_fire,
         "flagged": bool(collapse or tr_fire),
     }
@@ -214,7 +230,13 @@ def _temporal_coverage_sweep(video_bytes, skip_starts=()):
             "analyzed": len(records),
             "flagged": flagged,
             "collapse_windows": sum(1 for r in records if r["collapse"]),
+            "deep_collapse_windows": sum(1 for r in records if r["deep_collapse"]),
             "tr_windows": sum(1 for r in records if r["tr_fire"]),
+            "white_windows": sum(
+                1 for r in records
+                if r["tr_fire"] and r.get("white") is not None
+                and float(r["white"]) >= _COVERAGE_WHITE_MIN
+            ),
             "flagged_frac": round(flagged / len(records), 3),
             "windows": records,
         }

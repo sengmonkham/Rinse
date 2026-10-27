@@ -155,13 +155,22 @@ Two known-AI Instagram reels were reading `AUTHENTIC_HUMAN` (19 and 16). Tiling 
 
 Every server-side video scan now also runs a **coverage sweep**: up to 8 consecutive windows across the first 384 frames (`VIDEO_COVERAGE_MAX_FRAMES`, `VIDEO_COVERAGE_MAX_WINDOWS`), each scored by PwTF-DVD and the temporal-residual probe. The result is reported in the verdict as `temporal_coverage` (per-window records plus `flagged` / `analyzed` / `flagged_frac` / `collapse_windows` / `tr_windows`), and the sweep deliberately does **not** feed the existing escalation paths, so previously calibrated verdicts do not move.
 
-**The honest limit, measured at the same time:** repeated collapse is not unique to generated clips. The repo's own real reference clip collapses in 6 of its 15 windows and fires the residual probe in 4 (67% of windows) — more than any other real negative — and a window-by-window comparison of coherence floor, spectral flatness, residual autocorrelation, residual whiteness, temporal variance, D3 volatility and interframe motion found **no statistic that separates the two missed reels from it**. So escalation from repeated coverage is explicitly opt-in:
+**The honest limit, measured at the same time:** repeated *partial* collapse is not unique to generated clips. The clip then believed to be the repo's real reference (`test videos/vid2.mp4`) collapsed in 6 of its 15 windows and fired the residual probe in 4 (67% of windows) — more than any other negative — and a window-by-window comparison of coherence floor, spectral flatness, residual autocorrelation, residual whiteness, temporal variance, D3 volatility and interframe motion found **no statistic that separated the two missed reels from it**. So escalation from repeated *partial* coverage stayed opt-in:
 
-| `COVERAGE_MODE` | repeated evidence (≥ 3 windows and ≥ 50%) | measured cost |
+| `COVERAGE_MODE` | repeated partial evidence (≥ 3 windows and ≥ 50%) | measured cost |
 |---|---|---|
 | `review` (**default**) | floors the verdict at **INCONCLUSIVE** — no longer "authentic", not accused of being AI | none on the real clips (they stay authentic) |
-| `flag` | floors at **69 SUSPICIOUS** (capped 79, never SYNTHETIC_AI) | the repo's real reference clip also becomes SUSPICIOUS |
+| `flag` | floors at **69 SUSPICIOUS** (capped 79, never SYNTHETIC_AI) | any clip with that partial signature, including `vid2` |
 | `off` | rule disabled | — |
+
+### Two stricter coverage signatures are scored by default (2026-10-22)
+
+The 2026-10-22 batch added 20 more AI reels; three of them read `40 INCONCLUSIVE` with HIGH confidence, and re-measuring exposed both a second discriminator and a bad label:
+
+- **`vid2`/`vid3` are generated, not real.** They are the same file byte for byte (identical SHA-256) — the "two real reference clips" were one clip counted twice — and it is generated footage: the pigeon in the subject's hand morphs into a pastry/rock between frames 83–154 while the hand pose is unchanged, the motorcycle/chair/vacuum props sit in the scene without contact shadows or consistent perspective, the render is 24 fps, and it carries burned-in "believe anything / can be fake / get tricked" captions. They are now labelled AI in `tests/test_videos.py`, which removes the only negative that made repeated collapse unusable.
+- **Two signatures never occur on the authentic reels in the corpus**, measured on 32-frame windows over the first 384 frames: a **total** collapse (`p05 < 0.10`) repeated in **≥ 2 windows** (AI 4/12 and 2/12; authentic 0/7 and 1/7), and a temporal-residual fire whose **residual white-fraction ≥ 0.55** (AI 0.73 / 0.59; authentic at most 0.42). Both now floor the verdict at **69 SUSPICIOUS** (cap 79, never SYNTHETIC_AI), independent of `COVERAGE_MODE` and still skipped for a confirmed camera/watermark override. The sweep reports the counts as `deep_collapse_windows` and `white_windows`, and each window record carries `white`, `deep_collapse` and `tr_score`.
+
+Measured effect on the three misses (defaults, cache bypassed): `ig-DeeYNdsMiqC` 40 → **69 SUSPICIOUS**, `ig-DeTtabsthXY` 40 → **69 SUSPICIOUS**, `ig-DeppmpCtSnZ` 40 → **69 SUSPICIOUS**; the two confirmed-authentic reels are unchanged (`ig-DecK8wQPTM7` 24, `ig-human-post-01` 12, both `AUTHENTIC_HUMAN`).
 
 The sweep costs extra temporal work per scan (~+15-25 s on a 720×1280 15 s reel with the shipped defaults); lower `VIDEO_COVERAGE_MAX_WINDOWS` or use `COVERAGE_MODE=off` on a latency-constrained deployment.
 
@@ -224,52 +233,39 @@ To publish the extension to the public:
 
 ### Python API Server Deployment (Hugging Face Spaces)
 
-Because deep learning models and PyTorch require significant memory (more than the 512MB limit provided on free tiers of services like Render or Koyeb), Hugging Face Spaces is recommended. It offers a free CPU tier with 16GB of RAM.
+The backend ships as a **Gradio-SDK Space** with the Flask API mounted on the
+Space root — the only shape a free account can host (ZeroGPU Spaces; Docker and
+`cpu-basic` hardware need a paid plan). Everything runs on CPU; the single
+`@spaces.GPU` function is a no-op that exists only to satisfy the ZeroGPU
+runtime and never burns quota.
 
-Follow these steps to deploy:
-1. Create a Hugging Face account and navigate to Spaces.
-2. Create a new Space, choose a name, and select Docker as the SDK (use the Blank template). Set hardware to CPU basic (Free) and visibility to Public.
-3. Upload your `server.py` file, your `.detectzoo_data` directory containing the model weights, and create the following configuration files in the root of your Space:
+```bash
+# Stage the package (also bakes the 282 MB CNNSpot weights into it)
+.venv/bin/python scripts/build_space_package.py
 
-#### requirements.txt
-```text
-flask
-flask-cors
-requests
-pillow
-yt-dlp
-torch --extra-index-url https://download.pytorch.org/whl/cpu
-detectzoo
+hf auth login
+hf repos create <user>/rinse-detector --type space --space-sdk gradio \
+  --flavor zero-a10g --public --exist-ok
+hf spaces secrets set <user>/rinse-detector API_KEY=<long-random-string>
+hf upload <user>/rinse-detector deploy/space_stage/. --repo-type space \
+  --exclude "**/__pycache__/**"
 ```
 
-#### Dockerfile
-```dockerfile
-FROM python:3.9-slim
+`packages.txt` installs ffmpeg (video decode, yt-dlp merges, audio track) and
+libglib2.0-0 (required by `opencv-python-headless`).
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    ffmpeg \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
+Verify, don't trust a green RUNNING badge:
 
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY .detectzoo_data/ /app/.detectzoo_data/
-COPY server.py .
-
-ENV PORT=7860
-EXPOSE 7860
-
-CMD ["python", "server.py"]
+```bash
+curl -s https://<user>-rinse-detector.hf.space/health
+# "detectzoo_loaded": true  — false means the neural layer fell back to
+# simulation mode and every scan is running without it.
 ```
 
-4. Once the Space build completes and shows a green Running status, your API is live.
-5. In your extension settings dashboard, set the API URL to:
-   `https://<your-username>-<your-space-name>.hf.space/predict`
+Then set the extension's API URL to `https://<your-username>-<your-space-name>.hf.space`
+(the extension accepts the bare host) and the API key to the same `API_KEY`.
+Endpoints and payloads are unchanged. Full guide plus Render / Oracle / Azure
+targets: [`deploy/DEPLOY.md`](deploy/DEPLOY.md).
 
 ## Dev Tools
 
@@ -301,7 +297,7 @@ Corpus: `demo-samples/texts/` + the StoryScope evasion samples + the humanizer o
 Current known reds, kept visible on purpose:
 
 - `demo-samples/texts/human-written.txt` reads ~79 (AI) under StoryScope's offline heuristic engine while DNA-DetectLLM reads ~23 (human) — a short, non-narrative post, i.e. the input the heuristic caveats above warn about.
-- `ig-DecC6x-zvBF` and `ig-DecPhb-iBFr` (AI) read `40 INCONCLUSIVE` under the default `COVERAGE_MODE=review`: the coverage sweep proves they carry the temporal signature (3/5 and 7/8 windows), but the same signature appears on real reference footage, so they are reported as needing review rather than as AI. Run with `COVERAGE_MODE=flag` and both read `69 SUSPICIOUS` (the local real reference clip then also flags — see the coverage-sweep section).
+- **No video reds as of 2026-10-22** — the full video suite is 59/59 with the default settings and the cache bypassed. The five reels that used to read `40 INCONCLUSIVE` (`ig-DecC6x-zvBF`, `ig-DecPhb-iBFr`, `ig-DeeYNdsMiqC`, `ig-DeTtabsthXY`, `ig-DeppmpCtSnZ`) now read `69 SUSPICIOUS` on the repeated total-collapse / residual-whiteness rules, and both confirmed-authentic reels stay `AUTHENTIC_HUMAN` (24 and 12). See the coverage-sweep section for the measured margins behind those rules.
 
 ### Extension dev tools
 
