@@ -147,7 +147,7 @@ def main() -> int:
         print("No text assets selected.")
         return 2
 
-    detector = h.Detector(args.live)
+    detector = h.Detector(args.live, args.key)
     flags = h.payload_flags(args)
     records = []
     h.print_header("text", len(assets), detector)

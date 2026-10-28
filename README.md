@@ -246,7 +246,8 @@ runtime and never burns quota.
 hf auth login
 hf repos create <user>/rinse-detector --type space --space-sdk gradio \
   --flavor zero-a10g --public --exist-ok
-hf spaces secrets set <user>/rinse-detector API_KEY=<long-random-string>
+export API_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+hf spaces secrets add <user>/rinse-detector -s API_KEY   # reads $API_KEY
 hf upload <user>/rinse-detector deploy/space_stage/. --repo-type space \
   --exclude "**/__pycache__/**"
 ```
@@ -290,7 +291,7 @@ Three runnable test files exercise the real detector code over the repo's own co
 .venv/bin/python tests/test_videos.py   # /predict/video/deep score + tier + PwTF p05
 ```
 
-Each file runs **in-process by default** — it imports the Flask app and drives it through its test client, so no server process is needed — or against a running server with `--live http://localhost:5001`. Useful flags: `--ids <id,id>` for a subset, `--audit` (video: print the per-window temporal evidence), `--skip-instagram` (local clips only), `--remote-images` (also scan the registered Brave-proxy image URLs), and `--use-cache` (the default sends `no_cache=true`, so every verdict is freshly computed). `tests/test_text.py` needs no network; `tests/test_videos.py` resolves the Instagram posts with yt-dlp exactly like the extension does (browser-cookie fallback included).
+Each file runs **in-process by default** — it imports the Flask app and drives it through its test client, so no server process is needed — or against a running server with `--live http://localhost:5001` — pointing `--live` at the deployed Space (`--live https://senkmonkham-rinse-detector.hf.space`) runs the same corpus against production, and `--key`/`$RINSE_API_KEY` supplies the bearer key that server requires. Useful flags: `--ids <id,id>` for a subset, `--audit` (video: print the per-window temporal evidence), `--skip-instagram` (local clips only), `--remote-images` (also scan the registered Brave-proxy image URLs), and `--use-cache` (the default sends `no_cache=true`, so every verdict is freshly computed). `tests/test_text.py` needs no network; `tests/test_videos.py` resolves the Instagram posts with yt-dlp exactly like the extension does (browser-cookie fallback included).
 
 Corpus: `demo-samples/texts/` + the StoryScope evasion samples + the humanizer outputs (text), `tests/calibration_corpus/{ai,real}/` (images), and `test videos/` plus the Instagram posts registered in `tests/detector_assets.json` and `tests/media_test_assets.json` (videos — the latter holds the 30 added links; `ig-DecK8wQPTM7` is labelled `human` there because the user confirmed it is authentic). Each run prints a per-asset score line and a `SCORES` recap, and merges the raw evidence (scores, tiers, PwTF/window metrics, reasons) into `tests/media_test_results.json`. The exit status is 0 only when no labeled asset FAILs and nothing errored; assets that are deliberately unasserted (single frames extracted from generated reels) or unlabeled are reported **score-only**.
 

@@ -67,15 +67,19 @@ MIME_BY_EXT = {
 # HTTP / client
 # ---------------------------------------------------------------------------
 
-def http_json(url, payload=None, timeout=900):
+def http_json(url, payload=None, timeout=900, token=""):
     """POST (or GET) JSON and return (status, body). Errors are returned as
-    (0, {"error": ...}) rather than raised, so a bad asset never aborts a run."""
+    (0, {"error": ...}) rather than raised, so a bad asset never aborts a run.
+
+    `token` adds ``Authorization: Bearer`` for servers started with API_KEY set
+    (the deployed HF Space rejects unauthenticated /predict calls with 401)."""
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     if payload is None:
-        req = urllib.request.Request(url)
+        req = urllib.request.Request(url, headers=headers)
     else:
         data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(url, data=data,
-                                     headers={"Content-Type": "application/json"})
+        headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=data, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, json.loads(r.read().decode("utf-8"))
@@ -97,8 +101,9 @@ class Detector:
     real HTTP POST to a running server.
     """
 
-    def __init__(self, base_url: str = ""):
+    def __init__(self, base_url: str = "", token: str = ""):
         self.base_url = (base_url or "").rstrip("/")
+        self.token = (token or "").strip()
         self.client = None
         if not self.base_url:
             import server  # noqa: PLC0415  (imports the Flask app + forensics stack)
@@ -116,12 +121,14 @@ class Detector:
             if body is None:
                 body = {"error": r.get_data(as_text=True)[:400]}
             return r.status_code, body
-        return http_json(self.base_url + path, payload, timeout=timeout)
+        return http_json(self.base_url + path, payload, timeout=timeout,
+                         token=self.token)
 
     def health(self):
         if self.client is not None:
             return self.client.get("/health").get_json(silent=True) or {}
-        status, body = http_json(self.base_url + "/health", None, timeout=10)
+        status, body = http_json(self.base_url + "/health", None, timeout=10,
+                                 token=self.token)
         return body if status == 200 else {}
 
 
@@ -130,6 +137,9 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         "--live", nargs="?", const=DEFAULT_BASE_URL, default="", metavar="URL",
         help=f"POST to a running server instead of importing the app in-process "
              f"(default when omitted: in-process; bare --live uses {DEFAULT_BASE_URL})")
+    parser.add_argument("--key", default=os.environ.get("RINSE_API_KEY", ""),
+                        help="Bearer API key for a protected server "
+                             "(default: $RINSE_API_KEY; unneeded in-process)")
     parser.add_argument("--ids", default="",
                         help="comma-separated asset ids to run (default: every asset)")
     parser.add_argument("--use-cache", action="store_true",

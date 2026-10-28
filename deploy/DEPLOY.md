@@ -30,7 +30,15 @@ burns no quota). All detection runs on CPU exactly like locally.
 
 The staged package also carries `packages.txt` (ffmpeg, plus libglib2.0-0 for
 `opencv-python-headless`) and the 282 MB DetectZoo CNNSpot weight, so a boot
-never has to download a model.
+never has to download a model. `packages.txt` must contain **package names
+only** — the Space build feeds every line to `apt-get install`, so a `#`
+comment becomes package names and fails the build with exit code 123.
+
+`app.py` serves through Gradio **Server mode** (`gr.Server(...).launch()`): a
+bare `uvicorn app:app` binds fine but the ZeroGPU runtime shuts it down, because
+`@spaces.GPU` is only honoured on Gradio's own launch path. Gradio's routes live
+at `/gradio_api`, the demo UI at `/ui/`, and the Flask API is mounted at `/`
+*after* `launch()` so its catch-all cannot shadow Gradio's routes.
 
 ## One-time setup: authenticate the hf CLI
 
@@ -53,7 +61,10 @@ hf repos create <your-username>/rinse-detector --type space \
   --space-sdk gradio --flavor zero-a10g --public --exist-ok
 
 # 3. Require the Bearer token (scans are CPU-bound; do not run this open)
-hf spaces secrets set <your-username>/rinse-detector API_KEY=<choose-a-long-random-string>
+#    -s API_KEY reads the value from your environment, so the key never lands
+#    in shell history. `hf spaces secrets set` does not exist on hf 2.x.
+export API_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+hf spaces secrets add <your-username>/rinse-detector -s API_KEY
 
 # 4. Upload the staged package (~297 MB: code + the baked weight, stored via
 #    LFS; unchanged files are skipped on later uploads)
@@ -63,7 +74,9 @@ hf upload <your-username>/rinse-detector deploy/space_stage/. --repo-type space 
 
 Watch the build: `hf spaces logs <your-username>/rinse-detector --follow`
 (first build installs torch + the ML stack — the weights are already in the
-repo, so there is nothing to fetch at boot; expect several minutes).
+repo, so there is nothing to fetch at boot; expect several minutes). If the
+Space parks in `BUILD_ERROR`, `hf spaces logs <your-username>/rinse-detector
+--build` shows the pip/apt failure that the run log hides.
 
 ## Verify (do not trust RUNNING alone)
 
@@ -81,7 +94,8 @@ curl -s https://<your-username>-rinse-detector.hf.space/predict/image/deep \
   -d "{\"image_url\": \"https://example.com/photo.jpg\", \"no_cache\": true}"
 ```
 
-The UI lives at `/gradio_api/` (Image and Video tabs, same detectors).
+The demo UI lives at `/ui/` (Image and Video tabs, same detectors); `/gradio_api`
+is Gradio's own server-mode namespace.
 
 ## Point the Chrome extension at it
 

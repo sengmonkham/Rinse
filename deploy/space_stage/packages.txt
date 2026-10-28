@@ -1,6 +1,2 @@
-# System packages for the RINSE Space (Debian base via the Gradio SDK).
-# ffmpeg       - video decode, yt-dlp HLS/DASH merges, audio-track decode.
-# libglib2.0-0 - required by opencv-python-headless; without it `import cv2`
-#                fails and the video temporal layers silently deactivate.
 ffmpeg
 libglib2.0-0

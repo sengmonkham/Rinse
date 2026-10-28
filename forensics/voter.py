@@ -1008,6 +1008,27 @@ def fuse_ensemble_verdict(
     elif is_video and ai_artifact_label == "possible" and alteration_label not in ("yes", "likely", "possible"):
         short_label = "Possibly has AI artifacts"
 
+    # Video headline label. Score and tier are untouched - this only scopes the
+    # wording to the artifacts found IN the clip instead of claiming how the
+    # clip was made. A temporal-family reading (which is what lifts most reels
+    # into the 69+ band) proves neither origin nor coverage: a clip can carry
+    # AI artifacts - an AI cover frame or thumbnail, an AI insert, AI upscaling -
+    # while the filmed content is authentic. Calling that "AI-generated" accuses
+    # the wrong thing, so the headline says what was actually detected and lets
+    # the score/tier carry the strength.
+    video_label = None
+    if is_video:
+        if tier == "SYNTHETIC_AI":
+            video_label = "Video has strong AI artifacts"
+        elif tier == "SUSPICIOUS":
+            video_label = "Video has AI artifacts - needs review"
+        if video_label is not None:
+            # The headline and the one-line summary must agree: the axis
+            # short_labels above describe only the pixel axes, so an escalated
+            # temporal verdict would otherwise read "has AI artifacts" next to
+            # "no clear AI artifacts detected".
+            short_label = video_label
+
     result: Dict[str, Any] = {
         "score": final_score,
         "confidence": confidence,
@@ -1035,6 +1056,8 @@ def fuse_ensemble_verdict(
         },
         "short_label": short_label,
     }
+    if video_label is not None:
+        result["label"] = video_label
 
     if extra_data:
         result.update(extra_data)

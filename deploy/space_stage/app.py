@@ -25,19 +25,24 @@ What runs here (the REAL backend, not a mock):
     satisfy the ZeroGPU runtime (at least one decorated callable required).
     See https://huggingface.co/docs/hub/spaces-sdks-gradio#zerogpu.
 
-Serve: uvicorn app:app --host 0.0.0.0 --port 7860
+Serve: python app.py
+
+Why Server mode: a bare FastAPI app run with `uvicorn app:app` starts fine but
+is killed by the ZeroGPU runtime, which only recognises an app that comes up
+through Gradio's own launch path (`@spaces.GPU` detection). `gr.Server` is
+Gradio's FastAPI subclass whose `.launch()` enters that path, so the Flask API,
+the mounted UI and the keepalive all live on one Gradio-launched ASGI app.
 """
 
 from __future__ import annotations
 
 import os
+import time
 
 import spaces  # MUST be imported before torch / any CUDA-touching import
 
 import gradio as gr
-import uvicorn
 from a2wsgi import WSGIMiddleware
-from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import server as rinse  # noqa: E402  (loads the full Flask app + all layers)
@@ -45,9 +50,12 @@ import server as rinse  # noqa: E402  (loads the full Flask app + all layers)
 # ---------------------------------------------------------------------------
 # FastAPI shell. Route order matters: Starlette matches routes in
 # registration order and a "/" mount matches EVERYTHING, so the Gradio UI
-# mount at /gradio_api MUST be registered before the Flask mount at "/".
+# UI mount (a specific prefix) MUST be registered before the Flask catch-all at
+# "/". The UI lives at /ui because /gradio_api belongs to Gradio itself in
+# Server mode (its launch readiness probe hits /gradio_api/startup-events).
 # ---------------------------------------------------------------------------
-fastapp = FastAPI(title="RINSE AI-media detector")
+# gr.Server (not FastAPI) so .launch() below goes through Gradio's launch path.
+fastapp = gr.Server(title="RINSE AI-media detector")
 fastapp.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # the Flask app applies its own CORS config inside
@@ -62,7 +70,7 @@ def _root_info():
     """Landing probe: 200 at the Space root with pointers to UI and API."""
     return {
         "service": "RINSE AI-media detector",
-        "ui": "/gradio_api/",
+        "ui": "/ui/",
         "health": "/health",
         "api": ["/predict", "/predict/image/fast", "/predict/image/deep", "/predict/video/deep"],
     }
@@ -167,15 +175,39 @@ with gr.Blocks(title="RINSE - AI image & video detector") as demo:
                     vid_out = gr.Markdown(label="Verdict")
             vid_btn.click(scan_video, inputs=[vid_in], outputs=[vid_out], api_name="scan_video")
 
-# UI first (specific prefix), Flask API last (catch-all root).
-# a2wsgi.WSGIMiddleware adapts the WSGI Flask app to ASGI - mounting the raw
-# Flask app fails at request time with "Flask.__call__() takes 3 positional
-# arguments but 4 were given" (Starlette passes (scope, receive, send),
-# which a WSGI app cannot accept).
-app = gr.mount_gradio_app(fastapp, demo, path="/gradio_api")
-app.mount("/", WSGIMiddleware(rinse.app), name="rinse-flask-api")
-
-
+# Demo UI on its own prefix (the Flask API is mounted at "/" later, in the
+# __main__ block, once Gradio's own routes exist).
+# ssr_mode=False is REQUIRED on the Hub. The Space runtime sets
+# GRADIO_SSR_MODE=true, and mount_gradio_app then starts a Node SSR server on
+# port 7860 (gradio 6 starts it with server_port=7860 when ssr_mode resolves
+# true) *before* uvicorn binds anything, so the app dies at boot with
+# "[Errno 98] error while attempting to bind on address ('0.0.0.0', 7860):
+# address already in use". The demo UI is a couple of Markdown panels - SSR buys
+# nothing here - so pin it off rather than depend on the runtime env.
+app = gr.mount_gradio_app(fastapp, demo, path="/ui", ssr_mode=False)
 if __name__ == "__main__":
     port = int(os.environ.get("PORT") or os.environ.get("GRADIO_SERVER_PORT") or 7860)
-    uvicorn.run(app, host="0.0.0.0", port=port)
+
+    # ORDER MATTERS. launch() registers Gradio's own routes (/gradio_api/...)
+    # on this app and THEN probes /gradio_api/startup-events. A catch-all
+    # Mount("/") registered before it would swallow those routes (404), and SSR
+    # would start a Node server on this same port before uvicorn binds it
+    # (GRADIO_SSR_MODE=true is what the Space exports).
+    app.launch(
+        server_name="0.0.0.0",
+        server_port=port,
+        ssr_mode=False,
+        prevent_thread_lock=True,
+    )
+
+    # Now that Gradio's routes exist, put the Flask API on the root path.
+    # a2wsgi.WSGIMiddleware adapts WSGI to ASGI - mounting the Flask app raw
+    # fails with "Flask.__call__() takes 3 positional arguments but 4 were given".
+    app.mount("/", WSGIMiddleware(rinse.app), name="rinse-flask-api")
+
+    # The uvicorn thread is non-daemon-blocking; keep the process alive.
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        pass
