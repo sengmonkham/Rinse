@@ -53,3 +53,6 @@ test videos/
 # Azure deploy state (holds the generated API key + registry name)
 deploy/azure/.azure-state.env
 
+
+# MNW benchmark dataset (cloned AI media repo, Git LFS objects)
+MNW/

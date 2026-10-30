@@ -1,0 +1,430 @@
+{
+  "base_url": "https://senkmonkham-rinse-detector.hf.space",
+  "generated_at": "2026-10-30T04:37:49Z",
+  "images": {
+    "mode": "images",
+    "samples": 16,
+    "answered": 16,
+    "flagged": 9,
+    "recall_pct": 56.2,
+    "tiers": {
+      "SYNTHETIC_AI": 5,
+      "SUSPICIOUS": 4,
+      "INCONCLUSIVE": 1,
+      "AUTHENTIC_HUMAN": 6
+    },
+    "latency_ms": {
+      "p50": 4526.0,
+      "max": 10084
+    },
+    "constant_layers": [
+      "c2pa",
+      "frequency",
+      "metadata",
+      "spai"
+    ],
+    "layer_values": {
+      "frequency": [
+        "15",
+        "35"
+      ],
+      "metadata": [
+        "65",
+        "95"
+      ],
+      "neural": [
+        "11",
+        "13",
+        "23",
+        "5",
+        "60",
+        "70",
+        "80"
+      ],
+      "spai": [
+        "10",
+        "20"
+      ],
+      "c2pa": [
+        "99"
+      ]
+    },
+    "rows": [
+      {
+        "label": "Adobe_Firefly_v2",
+        "file": "AI_Images/Adobe_Firefly_v2/Adobe_Firefly_v2_014d0db87d3f42cdb2d33ef1a.jpg",
+        "status": 200,
+        "ms": 2913,
+        "score": 92,
+        "tier": "SYNTHETIC_AI",
+        "layers": {
+          "frequency": 35,
+          "metadata": 95,
+          "neural": 70,
+          "spai": 10
+        },
+        "error": null
+      },
+      {
+        "label": "Adobe_Firefly_v2",
+        "file": "AI_Images/Adobe_Firefly_v2/Adobe_Firefly_v2_01f421d0cd324107836e59f75.jpg",
+        "status": 200,
+        "ms": 6225,
+        "score": 92,
+        "tier": "SYNTHETIC_AI",
+        "layers": {
+          "c2pa": 99,
+          "frequency": 35,
+          "metadata": 95,
+          "neural": 5,
+          "spai": 20
+        },
+        "error": null
+      },
+      {
+        "label": "Adobe_Firefly_v3",
+        "file": "AI_Images/Adobe_Firefly_v3/Adobe_Firefly_v3_012be870cdfc4255ba065f6a7.jpg",
+        "status": 200,
+        "ms": 2223,
+        "score": 70,
+        "tier": "SUSPICIOUS",
+        "layers": {
+          "frequency": 35,
+          "metadata": 65,
+          "neural": 70,
+          "spai": 10
+        },
+        "error": null
+      },
+      {
+        "label": "Adobe_Firefly_v3",
+        "file": "AI_Images/Adobe_Firefly_v3/Adobe_Firefly_v3_015e4cba4a4c43dfa36edd3de.jpg",
+        "status": 200,
+        "ms": 4484,
+        "score": 70,
+        "tier": "SUSPICIOUS",
+        "layers": {
+          "frequency": 35,
+          "metadata": 65,
+          "neural": 70,
+          "spai": 20
+        },
+        "error": null
+      },
+      {
+        "label": "Adobe_Firefly_v4",
+        "file": "AI_Images/Adobe_Firefly_v4/Adobe_Firefly_4_0095887e99e74b0ba245c1e8e.jpg",
+        "status": 200,
+        "ms": 3525,
+        "score": 92,
+        "tier": "SYNTHETIC_AI",
+        "layers": {
+          "c2pa": 99,
+          "frequency": 35,
+          "metadata": 95,
+          "neural": 23,
+          "spai": 20
+        },
+        "error": null
+      },
+      {
+        "label": "Adobe_Firefly_v4",
+        "file": "AI_Images/Adobe_Firefly_v4/Adobe_Firefly_4_0114ba5b5c0d4b1aa36a3fbf5.jpg",
+        "status": 200,
+        "ms": 10084,
+        "score": 92,
+        "tier": "SYNTHETIC_AI",
+        "layers": {
+          "c2pa": 99,
+          "frequency": 35,
+          "metadata": 95,
+          "neural": 23,
+          "spai": 20
+        },
+        "error": null
+      },
+      {
+        "label": "Adversarial_images",
+        "file": "AI_Images/Adversarial_images/AI_generated_adversarial_images_01.jpg",
+        "status": 200,
+        "ms": 2400,
+        "score": 21,
+        "tier": "AUTHENTIC_HUMAN",
+        "layers": {
+          "frequency": 35,
+          "neural": 13,
+          "spai": 20
+        },
+        "error": null
+      },
+      {
+        "label": "Adversarial_images",
+        "file": "AI_Images/Adversarial_images/AI_generated_adversarial_images_02.jpg",
+        "status": 200,
+        "ms": 6035,
+        "score": 20,
+        "tier": "AUTHENTIC_HUMAN",
+        "layers": {
+          "frequency": 15,
+          "neural": 23,
+          "spai": 20
+        },
+        "error": null
+      },
+      {
+        "label": "Amazon_Titan_v2",
+        "file": "AI_Images/Amazon_Titan_v2/Amazon_Titan_v2_022d1c1c3dc04a869664f0313.jpg",
+        "status": 200,
+        "ms": 2077,
+        "score": 14,
+        "tier": "AUTHENTIC_HUMAN",
+        "layers": {
+          "frequency": 35,
+          "neural": 5,
+          "spai": 10
+        },
+        "error": null
+      },
+      {
+        "label": "Amazon_Titan_v2",
+        "file": "AI_Images/Amazon_Titan_v2/Amazon_Titan_v2_02530b53525b4eb7a7748a35f.jpg",
+        "status": 200,
+        "ms": 5287,
+        "score": 17,
+        "tier": "AUTHENTIC_HUMAN",
+        "layers": {
+          "frequency": 35,
+          "neural": 5,
+          "spai": 20
+        },
+        "error": null
+      },
+      {
+        "label": "Aura_flow",
+        "file": "AI_Images/Aura_flow/Aura_flow_00181075b2154a42b518ea6f6.jpg",
+        "status": 200,
+        "ms": 2347,
+        "score": 15,
+        "tier": "AUTHENTIC_HUMAN",
+        "layers": {
+          "frequency": 15,
+          "neural": 11,
+          "spai": 20
+        },
+        "error": null
+      },
+      {
+        "label": "Aura_flow",
+        "file": "AI_Images/Aura_flow/Aura_flow_024266b8f86a44a1819c6902f.jpg",
+        "status": 200,
+        "ms": 6592,
+        "score": 22,
+        "tier": "AUTHENTIC_HUMAN",
+        "layers": {
+          "frequency": 35,
+          "neural": 23,
+          "spai": 10
+        },
+        "error": null
+      },
+      {
+        "label": "Baidu",
+        "file": "AI_Images/Baidu/Baidu_00068fe7e65b46d38e786dc62.jpg",
+        "status": 200,
+        "ms": 4568,
+        "score": 70,
+        "tier": "SUSPICIOUS",
+        "layers": {
+          "frequency": 35,
+          "neural": 70,
+          "spai": 20
+        },
+        "error": null
+      },
+      {
+        "label": "Baidu",
+        "file": "AI_Images/Baidu/Baidu_0099951177c940548ded06ba4.jpg",
+        "status": 200,
+        "ms": 5955,
+        "score": 70,
+        "tier": "SUSPICIOUS",
+        "layers": {
+          "frequency": 35,
+          "neural": 80,
+          "spai": 20
+        },
+        "error": null
+      },
+      {
+        "label": "Baidu_Ernie",
+        "file": "AI_Images/Baidu_Ernie/Baidu_Ernie_02105b0af68e4e7284ca4ccd4.jpg",
+        "status": 200,
+        "ms": 2464,
+        "score": 92,
+        "tier": "SYNTHETIC_AI",
+        "layers": {
+          "c2pa": 99,
+          "frequency": 15,
+          "neural": 70,
+          "spai": 20
+        },
+        "error": null
+      },
+      {
+        "label": "Baidu_Ernie",
+        "file": "AI_Images/Baidu_Ernie/Baidu_Ernie_0219e49698bb480ea9b439029.jpg",
+        "status": 200,
+        "ms": 5250,
+        "score": 41,
+        "tier": "INCONCLUSIVE",
+        "layers": {
+          "frequency": 35,
+          "neural": 60,
+          "spai": 20
+        },
+        "error": null
+      }
+    ]
+  },
+  "videos": {
+    "mode": "videos",
+    "samples": 6,
+    "answered": 6,
+    "flagged": 3,
+    "recall_pct": 50.0,
+    "tiers": {
+      "SYNTHETIC_AI": 0,
+      "SUSPICIOUS": 3,
+      "INCONCLUSIVE": 0,
+      "AUTHENTIC_HUMAN": 3
+    },
+    "latency_ms": {
+      "p50": 5641.5,
+      "max": 10364
+    },
+    "constant_layers": [
+      "frequency",
+      "spai",
+      "tr"
+    ],
+    "layer_values": {
+      "frequency": [
+        "35"
+      ],
+      "neural": [
+        "18",
+        "21",
+        "23",
+        "5",
+        "6"
+      ],
+      "pwtf": [
+        "12",
+        "14",
+        "5",
+        "62"
+      ],
+      "spai": [
+        "10",
+        "20"
+      ],
+      "tr": [
+        "62"
+      ]
+    },
+    "rows": [
+      {
+        "label": "AI_Video/Adobe_Firefly_video",
+        "file": "AI_Video/Adobe_Firefly_video/Adobe_Firefly_video_01.mp4",
+        "status": 200,
+        "ms": 2468,
+        "score": 20,
+        "tier": "AUTHENTIC_HUMAN",
+        "layers": {
+          "frequency": 35,
+          "neural": 23,
+          "pwtf": 5,
+          "spai": 20
+        },
+        "error": null
+      },
+      {
+        "label": "AI_Video/CogVideoX-2B",
+        "file": "AI_Video/CogVideoX-2B/CogVideoX-2B_01.mp4",
+        "status": 200,
+        "ms": 1752,
+        "score": 69,
+        "tier": "SUSPICIOUS",
+        "layers": {
+          "frequency": 35,
+          "neural": 5,
+          "pwtf": 5,
+          "spai": 20,
+          "tr": 62
+        },
+        "error": null
+      },
+      {
+        "label": "AI_Video/Google_VEO3",
+        "file": "AI_Video/Google_VEO3/Google_VEO3_01.mp4",
+        "status": 200,
+        "ms": 2340,
+        "score": 18,
+        "tier": "AUTHENTIC_HUMAN",
+        "layers": {
+          "frequency": 35,
+          "neural": 18,
+          "pwtf": 14,
+          "spai": 10
+        },
+        "error": null
+      },
+      {
+        "label": "AI_Video/Google_VEO3.1_Fast",
+        "file": "AI_Video/Google_VEO3.1_Fast/Google_VEO3_1_Fast_001.mp4",
+        "status": 200,
+        "ms": 9388,
+        "score": 69,
+        "tier": "SUSPICIOUS",
+        "layers": {
+          "frequency": 35,
+          "neural": 6,
+          "pwtf": 12,
+          "spai": 10,
+          "tr": 62
+        },
+        "error": null
+      },
+      {
+        "label": "AI_Video/Google_VEO3.1_Lite",
+        "file": "AI_Video/Google_VEO3.1_Lite/Google_VEO3_1_Lite_001.mp4",
+        "status": 200,
+        "ms": 10364,
+        "score": 69,
+        "tier": "SUSPICIOUS",
+        "layers": {
+          "frequency": 35,
+          "neural": 21,
+          "pwtf": 62,
+          "spai": 20
+        },
+        "error": null
+      },
+      {
+        "label": "AI_Video/Grok_Imagine",
+        "file": "AI_Video/Grok_Imagine/Grok_Imagine_001.mp4",
+        "status": 200,
+        "ms": 8815,
+        "score": 18,
+        "tier": "AUTHENTIC_HUMAN",
+        "layers": {
+          "frequency": 35,
+          "neural": 23,
+          "pwtf": 5,
+          "spai": 10
+        },
+        "error": null
+      }
+    ]
+  }
+}
