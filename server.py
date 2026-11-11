@@ -1,5 +1,6 @@
 import os
 import io
+import json
 import hashlib
 import hmac
 import time
@@ -7,6 +8,9 @@ import shutil
 import tempfile
 import subprocess
 import base64
+import atexit
+import queue
+import threading
 from urllib.parse import urlparse
 
 import numpy as np
@@ -22,7 +26,7 @@ except ImportError:
     _NUMPY_AVAILABLE = False
 
 try:
-    from flask import Flask, request, jsonify
+    from flask import Flask, request, jsonify, Response
     from flask_cors import CORS
 except ImportError:
     print("\n" + "="*80)
@@ -52,8 +56,55 @@ except Exception as e:
     print("="*80 + "\n")
 
 app = Flask(__name__)
-# Enable CORS for Chrome Extensions and Standalone browser previews
-CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Only the RINSE web app and this machine may call the API. Browser requests
+# carry an Origin/Referer; the site's server-side /api/scan proxy has neither,
+# so it is allowed only with the bearer token. /health stays public so
+# platform probes and the web warm-up ping can reach a sleeping Space.
+ALLOWED_WEB_HOSTS = {
+    "getrinse.tech",
+    "app.getrinse.tech",
+}
+ALLOWED_ORIGIN_PATTERNS = [
+    r"https?://(?:app\.)?getrinse\.tech(?::\d+)?",
+    r"http://localhost(?::\d+)?",
+    r"http://127\.0\.0\.1(?::\d+)?",
+]
+CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGIN_PATTERNS}})
+
+
+def _origin_host(value: str) -> str:
+    try:
+        return (urlparse(value).hostname or "").lower()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+@app.before_request
+def _restrict_clients():
+    """Deny browsers and clients that are not the RINSE site or this machine."""
+    if request.path in ("/health", "/v1/health"):
+        return None
+
+    origin = request.headers.get("Origin") or request.headers.get("Referer") or ""
+    if origin:
+        if _origin_host(origin) in ALLOWED_WEB_HOSTS:
+            return None
+        return jsonify({"error": "Forbidden origin."}), 403
+
+    # No browser origin: local development, or an authenticated server-side
+    # call from the site. A proxied request (X-Forwarded-For present) never
+    # counts as local, even if the platform's proxy connects over loopback.
+    remote = (request.remote_addr or "").strip()
+    is_local = (
+        not request.headers.get("X-Forwarded-For")
+        and (remote in ("127.0.0.1", "::1") or remote.startswith("127."))
+    )
+    if is_local:
+        return None
+    if _check_auth():
+        return None
+    return jsonify({"error": "Forbidden: allowed origin or bearer token required."}), 403
 
 # Optional bearer-token auth: set API_KEY (or BEARER_TOKEN) to require it
 API_KEY = os.environ.get("API_KEY") or os.environ.get("BEARER_TOKEN") or ""
@@ -142,6 +193,12 @@ def _score_coverage_tile(frames, tr_mod):
     tr_score = s_tr.get("score")
     tr_metrics = s_tr.get("metrics") or {}
     white = tr_metrics.get("residual_white_frac")
+    # Residual energy and hot share are reported so the voter can tell FLICKER
+    # (noise-like residual with a mostly-quiet frame) from MOTION (residual
+    # covering nearly the whole frame). Without them the voter only saw
+    # whiteness, which real fast motion produces too.
+    energy = tr_metrics.get("residual_energy_mean")
+    hot = tr_metrics.get("residual_hot_frac")
     collapse = bool(
         pwtf_score is not None and pwtf_score >= 60
         and p05 is not None and p05 < _COVERAGE_COLLAPSE_P05
@@ -152,6 +209,8 @@ def _score_coverage_tile(frames, tr_mod):
         "p05": p05,
         "tr_score": tr_score,
         "white": white,
+        "energy": energy,
+        "hot": hot,
         "collapse": collapse,
         # Deeper than the escalation's 0.25 collapse band - voter.py scores
         # repetition of this one (see _COVERAGE_DEEP_P05).
@@ -238,6 +297,16 @@ def _temporal_coverage_sweep(video_bytes, skip_starts=()):
                 and float(r["white"]) >= _COVERAGE_WHITE_MIN
             ),
             "flagged_frac": round(flagged / len(records), 3),
+            # Clip-level residual means (see _score_coverage_tile): the voter's
+            # sustained-flicker rule needs the average, not one window.
+            "white_mean": round(
+                sum(float(r["white"]) for r in records if r.get("white") is not None)
+                / max(1, sum(1 for r in records if r.get("white") is not None)), 4
+            ) if any(r.get("white") is not None for r in records) else None,
+            "hot_mean": round(
+                sum(float(r["hot"]) for r in records if r.get("hot") is not None)
+                / max(1, sum(1 for r in records if r.get("hot") is not None)), 4
+            ) if any(r.get("hot") is not None for r in records) else None,
             "windows": records,
         }
     except Exception as e:  # noqa: BLE001
@@ -788,6 +857,25 @@ if _CACHE_ENABLED:
         print(f"Scan cache unavailable, running uncached: {e}")
         _CACHE_ENABLED = False
 
+# --- Scan log (SQLite, one row per scan) ------------------------------------
+# Same fail-open policy as the cache: if the log can't initialize, scans still
+# run - they just aren't recorded. SCAN_LOG=0 turns it off deliberately.
+scan_log = None
+try:
+    from forensics import scan_log as scan_log  # noqa: E402,F811
+
+    if scan_log.ENABLED:
+        scan_log.stats()  # force schema init + fail fast if the DB is unusable
+        print(
+            f"Scan log enabled at {scan_log.DB_PATH} "
+            f"(retention {scan_log.RETENTION_DAYS}d, human {scan_log.HUMAN_RETENTION_DAYS}d)"
+        )
+    else:
+        print("Scan log disabled (SCAN_LOG=0).")
+except Exception as e:  # noqa: BLE001
+    print(f"Scan log unavailable, scans won't be recorded: {e}")
+    scan_log = None
+
 
 def _collage_tile_stats(img, grid=4, work=512, color_bits=4):
     """Per-tile busyness statistics of a partitioned image (Phase 4a).
@@ -1263,9 +1351,13 @@ from forensics import (
 )
 from forensics.d3 import analyze_second_order_dynamics
 from forensics import spai
+from forensics.learned_image import analyze_learned_image
 from forensics import rppg as _rppg
 from forensics import temporal_residual as _tr
 from forensics import audio_track as _audio
+from forensics import capture_origin as _capture_origin
+from forensics import camera_physics as _camera_physics
+from forensics import embedding_consistency as _embedding
 from storyscope import dna_detect
 
 
@@ -1571,6 +1663,9 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
     per_window_d3 = []
     per_window_rppg = []
     per_window_tr = []
+    per_window_cap = []
+    per_window_cam = []
+    per_window_emb = []
     window_details = []
 
     # Pass 1 - temporal layers on EVERY window; strongest evidence wins. Both
@@ -1619,6 +1714,28 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
             "score": None, "active": False, "reasons": ["Temporal residual probe unavailable."], "metrics": {},
         }
         per_window_tr.append(s_tr)
+        # Capture-origin probe (native resolution). The ONLY layer that does not
+        # work on the 128px grayscale thumbnail: it measures whether the clip is
+        # a rendered image sequence (exactly flat fills + byte-identical image
+        # rows), which sensor read noise makes impossible on camera footage.
+        s_cap = _capture_origin.analyze_capture_origin(win)
+        per_window_cap.append(s_cap)
+        # Camera-physics probe (native resolution, metrics-only). Measures the
+        # photon-transfer curve / fixed-pattern noise / residual spectrum that a
+        # camera sensor imposes and a diffusion render does not. It does NOT vote
+        # yet - calibration (scripts/probe_camera_physics.py, 2026-11-11) showed
+        # no single statistic separates real from photoreal-AI with a defensible
+        # margin on the 7-real-clip corpus - so it surfaces measurements only.
+        s_cam = _camera_physics.analyze_camera_physics(win)
+        per_window_cam.append(s_cam)
+        # Embedding-consistency probe (DINOv2 one-class, the photoreal-diffusion
+        # signal). Measures how far each frame sits from a bank of REAL-clip
+        # embeddings. Votes SUSPICIOUS (capped 79) when the distance is clearly
+        # outside the measured real range - the only signal that separated the 8
+        # hyper-real Higgsfield clips from the 7 confirmed-real clips (real max
+        # 0.642 vs hyper-real min 0.678, calibrated 2026-11-11).
+        s_emb = _embedding.analyze_embedding_consistency(win)
+        per_window_emb.append(s_emb)
         window_details.append({
             "frames": len(win),
             "temporal_score": s_temporal.get("score"),
@@ -1634,6 +1751,12 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
             "tr_score": s_tr.get("score"),
             "tr_metrics": s_tr.get("metrics"),
             "tr_reasons": s_tr.get("reasons"),
+            "capture_origin_score": s_cap.get("score"),
+            "capture_origin_metrics": s_cap.get("metrics"),
+            "camera_physics_score": s_cam.get("score"),
+            "camera_physics_metrics": s_cam.get("metrics"),
+            "embedding_score": s_emb.get("score"),
+            "embedding_metrics": s_emb.get("metrics"),
         })
 
     # Pass 2 - spatial layers (plan v2 Phase 1.5). These used to run ONLY on
@@ -1673,7 +1796,9 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
         # video frames (every decoded frame rings periodically at 512x512
         # - measured ~10 on both real and generated reels).
         w3 = analyze_frequency_domain(mid_frame, include_grid_peaks=False)
-        w4 = analyze_neural_and_heatmap("", mid_frame, allow_flat_render_vote=False)
+        w4 = analyze_neural_and_heatmap(
+            "", mid_frame, allow_flat_render_vote=False, include_heatmap=False
+        )
         w5 = spai.detect(mid_frame)
 
         # Pixel forensics: ONLY the known-AI-artwork perceptual fingerprint
@@ -1775,6 +1900,32 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
     if per_window_tr:
         best_tr = max(per_window_tr, key=lambda s: (s.get("score") or -1))
 
+    # Strongest capture-origin window (a rendered scene can occupy one shot of
+    # an otherwise-camera clip; a real clip abstains in every window).
+    active_cap = [s["score"] for s in per_window_cap if s.get("score") is not None]
+    cap_score = max(active_cap) if active_cap else None
+    best_cap = (
+        max(per_window_cap, key=lambda s: (s.get("score") if s.get("score") is not None else -1))
+        if per_window_cap else None
+    )
+
+    # Camera-physics probe: metrics-only, so there is no score to select. Surface
+    # the window with the strongest texture-smoothness reading (the statistic
+    # that came closest to separating in calibration) for the verdict payload.
+    best_cam = (
+        max(per_window_cam, key=lambda s: (s.get("metrics") or {}).get("tex_ac1", -1.0))
+        if per_window_cam else None
+    )
+
+    # Embedding-consistency probe: strongest-window score wins (a regenerated
+    # scene can occupy one shot of an otherwise-camera clip).
+    active_emb = [s["score"] for s in per_window_emb if s.get("score") is not None]
+    emb_score = max(active_emb) if active_emb else None
+    best_emb = (
+        max(per_window_emb, key=lambda s: (s.get("score") if s.get("score") is not None else -1))
+        if per_window_emb else None
+    )
+
     verdict = fuse_ensemble_verdict(
         layers={
             "synthid": _max_spatial("synthid"),
@@ -1787,6 +1938,8 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
             "pwtf": pwtf_score,
             "rppg": best_rppg.get("score") if best_rppg else None,
             "tr": best_tr.get("score") if best_tr else None,
+            "capture_origin": cap_score,
+            "embedding": emb_score,
         },
         layer_reasons={
             "synthid": _dedup_reasons(
@@ -1808,6 +1961,15 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
             "tr": _dedup_reasons(
                 [r for s in per_window_tr for r in s.get("reasons", []) or []]
             ) if per_window_tr and any(s.get("active") for s in per_window_tr) else [],
+            "capture_origin": _dedup_reasons(
+                [r for s in per_window_cap for r in s.get("reasons", []) or []]
+            ) if per_window_cap else [],
+            "camera_physics": _dedup_reasons(
+                [r for s in per_window_cam for r in s.get("reasons", []) or []]
+            ) if per_window_cam else [],
+            "embedding": _dedup_reasons(
+                [r for s in per_window_emb for r in s.get("reasons", []) or []]
+            ) if per_window_emb else [],
             # Audio is reported, never scored: these lines document what the
             # audio layer found (and why it abstained when it did) so audio
             # evidence is never silently ignored.
@@ -1859,6 +2021,11 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
             "tr_active": best_tr.get("active", False) if best_tr else False,
             "tr_metrics": (best_tr.get("metrics") or {}) if best_tr else {},
             "tr_reasons": best_tr.get("reasons", []) if best_tr else [],
+            "camera_physics_metrics": (best_cam.get("metrics") or {}) if best_cam else {},
+            "camera_physics_reasons": (best_cam.get("reasons", []) if best_cam else []),
+            "embedding_score": emb_score,
+            "embedding_metrics": (best_emb.get("metrics") or {}) if best_emb else {},
+            "embedding_reasons": (best_emb.get("reasons", []) if best_emb else []),
             # Temporal coverage sweep (see _temporal_coverage_sweep): how much of
             # the clip - beyond the primary shot window - shows a coherence-floor
             # collapse or a temporal-residual fire. Reported per window, and used
@@ -1924,22 +2091,24 @@ def _download_image_bytes(url, timeout=15):
     return b"".join(chunks)
 
 
-def _load_image_from_payload(data):
-    """
-    Safely extract PIL Image, raw bytes, and optional temp file from JSON payload.
-    Returns: (img, raw_bytes, temp_file_path, error_tuple)
+def _load_image_bytes(data):
+    """Extract/download the raw image bytes WITHOUT decoding them.
+
+    The exact cache key is `sha256(namespace + raw_bytes)`, so a cached scan
+    only needs the bytes. Keeping this separate from the PIL decode lets the
+    endpoints answer a hit before paying base64 decode + PNG decode + a temp
+    file write (measured ~14 ms for a 0.4MB PNG on the dev machine).
+
+    Returns: (raw_bytes, error_tuple).
     """
     image_url = data.get("image_url")
     image_base64 = data.get("image_base64")
 
     if not image_url and not image_base64:
-        return None, None, None, (jsonify({"error": "No image source provided. Set 'image_url' or 'image_base64'."}), 400)
+        return None, (jsonify({"error": "No image source provided. Set 'image_url' or 'image_base64'."}), 400)
 
     if image_base64 and len(image_base64) > MAX_IMAGE_BYTES * 2:
-        return None, None, None, (jsonify({"error": "Image payload too large."}), 413)
-
-    raw_bytes = b""
-    temp_file = None
+        return None, (jsonify({"error": "Image payload too large."}), 413)
 
     try:
         if image_base64:
@@ -1947,60 +2116,105 @@ def _load_image_from_payload(data):
                 image_base64 = image_base64.split(",")[1]
             raw_bytes = base64.b64decode(image_base64)
             if len(raw_bytes) > MAX_IMAGE_BYTES:
-                return None, None, None, (jsonify({"error": "Image payload exceeds 20MB limit."}), 413)
-        else:
-            parsed = urlparse(image_url)
-            if parsed.scheme not in ("http", "https"):
-                return None, None, None, (jsonify({"error": "Invalid image URL: only http(s) sources are allowed."}), 400)
-            # Hotlink-protected proxies (Brave image search etc.) reject any
-            # server-side fetch with 403, while the original source usually
-            # allows it. When the proxy URL embeds the original source URL
-            # (base64url in the path), try the original first, then the proxy
-            # URL as given. A failure of every candidate raises to the outer
-            # handler, which reports the error honestly.
-            candidates = []
-            decoded_original = _decode_proxy_original_url(image_url)
-            if decoded_original:
-                candidates.append(decoded_original)
-            candidates.append(image_url)
+                return None, (jsonify({"error": "Image payload exceeds 20MB limit."}), 413)
+            return raw_bytes, None
 
-            last_err = None
-            for candidate in candidates:
-                try:
-                    # Source-fetch cache: the same meme URL is often scanned by many
-                    # users; skip the network download when we fetched it recently.
-                    if scan_cache is not None:
-                        cached = scan_cache.get_fetch(candidate)
-                        if cached is not None:
-                            raw_bytes = cached
-                            break
-                    raw_bytes = _download_image_bytes(candidate)
-                    if scan_cache is not None:
-                        scan_cache.store_fetch(candidate, raw_bytes)
-                    break
-                except Exception as e:
-                    last_err = e
-            else:
-                raise last_err if last_err else RuntimeError("Image download failed.")
+        parsed = urlparse(image_url)
+        if parsed.scheme not in ("http", "https"):
+            return None, (jsonify({"error": "Invalid image URL: only http(s) sources are allowed."}), 400)
+        # Hotlink-protected proxies (Brave image search etc.) reject any
+        # server-side fetch with 403, while the original source usually
+        # allows it. When the proxy URL embeds the original source URL
+        # (base64url in the path), try the original first, then the proxy
+        # URL as given. A failure of every candidate raises to the outer
+        # handler, which reports the error honestly.
+        candidates = []
+        decoded_original = _decode_proxy_original_url(image_url)
+        if decoded_original:
+            candidates.append(decoded_original)
+        candidates.append(image_url)
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as f:
-            f.write(raw_bytes)
-            temp_file = f.name
+        last_err = None
+        for candidate in candidates:
+            try:
+                # Source-fetch cache: the same meme URL is often scanned by many
+                # users; skip the network download when we fetched it recently.
+                if scan_cache is not None:
+                    cached = scan_cache.get_fetch(candidate)
+                    if cached is not None:
+                        return cached, None
+                raw_bytes = _download_image_bytes(candidate)
+                if scan_cache is not None:
+                    scan_cache.store_fetch(candidate, raw_bytes)
+                return raw_bytes, None
+            except Exception as e:
+                last_err = e
+        raise last_err if last_err else RuntimeError("Image download failed.")
+    except Exception as e:
+        return None, (jsonify({"error": f"Failed to load image: {str(e)}"}), 400)
 
+
+def _decode_image_bytes(raw_bytes):
+    """Decode raw image bytes into a PIL RGB image plus a temp-file path.
+
+    Returns: (img, temp_file_path). Raises on undecodable bytes.
+    """
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as f:
+        f.write(raw_bytes)
+        temp_file = f.name
+    try:
         img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+        return img, temp_file
+    except Exception:
+        try:
+            os.remove(temp_file)
+        except Exception:
+            pass
+        raise
+
+
+def _load_image_from_payload(data):
+    """
+    Safely extract PIL Image, raw bytes, and optional temp file from JSON payload.
+    Returns: (img, raw_bytes, temp_file_path, error_tuple)
+    """
+    raw_bytes, err = _load_image_bytes(data)
+    if err is not None:
+        return None, None, None, err
+    try:
+        img, temp_file = _decode_image_bytes(raw_bytes)
         return img, raw_bytes, temp_file, None
     except Exception as e:
-        if temp_file and os.path.exists(temp_file):
-            try:
-                os.remove(temp_file)
-            except Exception:
-                pass
         return None, None, None, (jsonify({"error": f"Failed to load image: {str(e)}"}), 400)
 
 
 # ---------------------------------------------------------------------------
 # Scan cache helpers (exact sha256 + near-dup dHash reuse; see plan §3)
 # ---------------------------------------------------------------------------
+
+def _serve_exact_hit(hit: dict):
+    """Add the fields a cache hit reports, exactly like a normal lookup."""
+    age_s = int(time.time() - hit.pop("_cached_at", time.time()))
+    hit["cached"] = "exact"
+    if age_s >= 0:
+        hit["cache_age_s"] = age_s
+    return hit
+
+
+def _image_exact_hit(raw_bytes: bytes, key_namespace: str, no_cache: bool = False):
+    """Exact cache lookup that needs only the raw bytes - no PIL decode.
+
+    Used before `_decode_image_bytes` so a repeat scan never pays the 10-15 ms
+    decode (plus temp-file write) for a verdict we already have.
+    """
+    if not _CACHE_ENABLED or no_cache or scan_cache is None:
+        return None
+    key = hashlib.sha256(
+        key_namespace.encode("utf-8") + b"\x00" + raw_bytes
+    ).hexdigest()
+    hit = scan_cache.get_verdict_exact(key)
+    return _serve_exact_hit(hit) if hit is not None else None
+
 
 def _cache_lookup_or_run(
     raw_bytes: bytes,
@@ -2009,6 +2223,7 @@ def _cache_lookup_or_run(
     dhash_img=None,
     no_cache: bool = False,
     key_namespace: str = None,
+    exact_prechecked: bool = False,
 ):
     """Exact/near-dup cache lookup; on miss runs the pipeline and stores.
 
@@ -2030,14 +2245,12 @@ def _cache_lookup_or_run(
     ns = key_namespace or kind
     key = hashlib.sha256(ns.encode("utf-8") + b"\x00" + raw_bytes).hexdigest()
 
-    # Layer 1: exact bytes
-    hit = scan_cache.get_verdict_exact(key)
-    if hit is not None:
-        age_s = int(time.time() - hit.pop("_cached_at", time.time()))
-        hit["cached"] = "exact"
-        if age_s >= 0:
-            hit["cache_age_s"] = age_s
-        return hit, 200
+    # Layer 1: exact bytes. The image endpoints already checked this before
+    # decoding, so they skip the duplicate lookup on a miss.
+    if not exact_prechecked:
+        hit = scan_cache.get_verdict_exact(key)
+        if hit is not None:
+            return _serve_exact_hit(hit), 200
 
     # Layer 2: near-duplicate (dHash) — decisive verdicts only
     if dhash_img is not None:
@@ -2077,6 +2290,101 @@ def _cache_lookup_or_run(
 
 def _no_cache_requested(data: dict) -> bool:
     return bool(data.get("no_cache"))
+
+
+_SCAN_LOG_QUEUE: "queue.Queue[dict]" = queue.Queue(maxsize=4096)
+_SCAN_LOG_WORKER: threading.Thread | None = None
+_SCAN_LOG_LOCK = threading.Lock()
+
+
+def _scan_log_worker() -> None:
+    """Drain queued scan rows off the request path.
+
+    SQLite has one writer, so doing a synchronous INSERT + commit per scan
+    serialises every request behind the log under load. The response no
+    longer waits for the row to hit disk; `/scans/*` can lag by milliseconds.
+    """
+    while True:
+        kwargs = _SCAN_LOG_QUEUE.get()
+        try:
+            if scan_log is not None:
+                scan_log.log_scan(**kwargs)
+        except Exception as e:  # noqa: BLE001
+            print(f"Scan log write failed (scan unaffected): {e}")
+        finally:
+            _SCAN_LOG_QUEUE.task_done()
+
+
+def _flush_scan_log(timeout: float = 3.0) -> None:
+    deadline = time.time() + timeout
+    while _SCAN_LOG_QUEUE.unfinished_tasks and time.time() < deadline:
+        time.sleep(0.02)
+
+
+def _start_scan_log_worker() -> None:
+    global _SCAN_LOG_WORKER
+    if _SCAN_LOG_WORKER is not None:
+        return
+    with _SCAN_LOG_LOCK:
+        if _SCAN_LOG_WORKER is not None:
+            return
+        atexit.register(_flush_scan_log)
+        thread = threading.Thread(
+            target=_scan_log_worker, name="scan-log-writer", daemon=True
+        )
+        thread.start()
+        _SCAN_LOG_WORKER = thread
+
+
+def _record_scan(
+    kind: str,
+    source: str,
+    verdict,
+    status: int = 200,
+    *,
+    cached=None,
+    excerpt: str | None = None,
+    content=None,
+    source_url: str | None = None,
+    started: float | None = None,
+) -> None:
+    """Queue one scan-log row. Best-effort: never affects the response.
+
+    `content` is hashed on the request thread but not retained; the row itself
+    is written by a background thread so a slow disk or a busy SQLite writer
+    cannot add latency to a scan.
+    """
+    if scan_log is None:
+        return
+    try:
+        forwarded = request.headers.get("X-Forwarded-For") or request.remote_addr
+        digest = None
+        if isinstance(content, bytes) and content:
+            digest = hashlib.sha256(content).hexdigest()
+        elif isinstance(content, str) and content:
+            digest = hashlib.sha256(content.encode("utf-8", "ignore")).hexdigest()
+        row = dict(
+            kind=kind,
+            verdict=verdict if isinstance(verdict, dict) else None,
+            source=source,
+            status=status,
+            cached=cached,
+            excerpt=excerpt,
+            content_sha256=digest,
+            content_chars=len(content) if isinstance(content, (bytes, str)) else None,
+            source_url=source_url,
+            ip=forwarded,
+            user_agent=request.headers.get("User-Agent"),
+            latency_ms=(time.time() - started) * 1000 if started else None,
+        )
+        _start_scan_log_worker()
+        try:
+            _SCAN_LOG_QUEUE.put_nowait(row)
+        except queue.Full:
+            # Under extreme load, drop the log row rather than the scan.
+            pass
+    except Exception as e:  # noqa: BLE001
+        print(f"Scan log skipped ({source}): {e}")
 
 
 def _video_cache_bytes(data: dict):
@@ -2207,11 +2515,16 @@ def _cached_video_deep(data):
     The cache key is computed from the payload itself, so an exact hit skips
     the (expensive) frame download/decode entirely.
     """
+    started = time.time()
     key_bytes = _video_cache_bytes(data)
     if key_bytes is None:
         resp, status = _run_video_deep(data)
         if isinstance(resp, dict):
             resp["cached"] = False
+        _record_scan(
+            "video", "video/deep", resp, status,
+            source_url=data.get("video_url"), started=started,
+        )
         return jsonify(resp), status
 
     resp, status = _cache_lookup_or_run(
@@ -2222,6 +2535,11 @@ def _cached_video_deep(data):
             str(data.get("source_caption") or ""),
             str(data.get("page_context") or ""),
         ),
+    )
+    _record_scan(
+        "video", "video/deep", resp, status,
+        cached=resp.get("cached") if isinstance(resp, dict) else None,
+        content=key_bytes, source_url=data.get("video_url"), started=started,
     )
     return jsonify(resp), status
 
@@ -2298,12 +2616,14 @@ def health():
         "detectzoo_loaded": DETECTZOO_AVAILABLE,
         "characters_loaded": _CHARACTERS_AVAILABLE,
         "cache_enabled": _CACHE_ENABLED,
+        "scan_log_enabled": bool(scan_log is not None and scan_log.ENABLED),
         "auth_required": bool(API_KEY),
-        "layers": ["synthid", "c2pa", "frequency", "neural", "temporal", "pwtf", "d3"],
+        "layers": ["synthid", "c2pa", "frequency", "neural", "learned", "temporal", "pwtf", "d3"],
         "endpoints": [
             "/predict", "/predict/image/fast", "/predict/image/deep",
             "/predict/video/deep", "/predict/storyscope", "/predict/text/dna",
-            "/cache/stats", "/cache/clear"
+            "/cache/stats", "/cache/clear",
+            "/scans/stats", "/scans/recent", "/scans/export"
         ],
         "timestamp": time.time()
     })
@@ -2335,6 +2655,119 @@ def cache_clear_endpoint():
         return jsonify({"error": f"Cache clear failed: {e}"}), 500
 
 
+@app.route("/scans/stats", methods=["GET"])
+def scans_stats_endpoint():
+    """Scan-log statistics: totals by mode/tier, human-likely counts (auth-gated)."""
+    if not _check_auth():
+        return jsonify({"error": "Unauthorized: missing or invalid Bearer token."}), 401
+    if scan_log is None or not scan_log.ENABLED:
+        return jsonify({"error": "Scan log is disabled."}), 503
+    try:
+        return jsonify(scan_log.stats())
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": f"Scan log stats failed: {e}"}), 500
+
+
+@app.route("/scans/recent", methods=["GET"])
+def scans_recent_endpoint():
+    """Newest logged scans (auth-gated).
+
+    Query params:
+      limit=50          rows to return (max 500)
+      kind=text|image|video
+      human=1           only verdicts that cleared as human / authentic
+      include_text=1    include the stored text excerpt
+      since=<epoch>     only scans at or after this Unix timestamp
+    """
+    if not _check_auth():
+        return jsonify({"error": "Unauthorized: missing or invalid Bearer token."}), 401
+    if scan_log is None or not scan_log.ENABLED:
+        return jsonify({"error": "Scan log is disabled."}), 503
+
+    kind = (request.args.get("kind") or "").lower().strip() or None
+    if kind and kind not in ("text", "image", "video"):
+        return jsonify({"error": "kind must be text, image, or video."}), 400
+    try:
+        limit = int(request.args.get("limit") or 50)
+    except ValueError:
+        return jsonify({"error": "limit must be an integer."}), 400
+    since_raw = request.args.get("since")
+    try:
+        since = float(since_raw) if since_raw else None
+    except ValueError:
+        return jsonify({"error": "since must be a Unix timestamp."}), 400
+
+    try:
+        rows = scan_log.recent(
+            limit,
+            kind=kind,
+            human_only=bool(request.args.get("human") in ("1", "true", "yes")),
+            include_text=bool(request.args.get("include_text") in ("1", "true", "yes")),
+            since=since,
+        )
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": f"Scan log read failed: {e}"}), 500
+    return jsonify({"count": len(rows), "scans": rows})
+
+
+@app.route("/scans/export", methods=["GET"])
+def scans_export_endpoint():
+    """Download matching scan-log rows as JSON Lines (auth-gated).
+
+    This is how the log leaves a deployed instance that has no shell: run
+
+        curl -H "Authorization: Bearer $API_KEY" \
+          "$BASE/scans/export?human=1&kind=text" -o human-corpus.jsonl
+
+    Query params mirror /scans/recent: kind, human=1, since=<epoch>,
+    include_verdict=1. Unlike /scans/recent there is no row cap — the whole
+    match is streamed, one JSON object per line.
+    """
+    if not _check_auth():
+        return jsonify({"error": "Unauthorized: missing or invalid Bearer token."}), 401
+    if scan_log is None or not scan_log.ENABLED:
+        return jsonify({"error": "Scan log is disabled."}), 503
+
+    kind = (request.args.get("kind") or "").lower().strip() or None
+    if kind and kind not in ("text", "image", "video"):
+        return jsonify({"error": "kind must be text, image, or video."}), 400
+    since_raw = request.args.get("since")
+    try:
+        since = float(since_raw) if since_raw else None
+    except ValueError:
+        return jsonify({"error": "since must be a Unix timestamp."}), 400
+
+    human_only = request.args.get("human") in ("1", "true", "yes")
+    include_verdict = request.args.get("include_verdict") in ("1", "true", "yes")
+
+    def stream():
+        try:
+            for item in scan_log.iter_rows(
+                kind=kind,
+                human_only=human_only,
+                since=since,
+                include_verdict=include_verdict,
+            ):
+                yield json.dumps(item, ensure_ascii=False) + "\n"
+        except Exception as e:  # noqa: BLE001
+            # Headers are already sent; emit a final line instead of a 500.
+            print(f"Scan log export stream failed: {e}")
+            yield json.dumps({"error": f"export interrupted: {e}"}) + "\n"
+
+    stamp = time.strftime("%Y%m%d-%H%M", time.gmtime())
+    return Response(
+        stream(),
+        mimetype="application/x-ndjson",
+        headers={
+            "Content-Disposition": f'attachment; filename="rinse-scans-{stamp}.jsonl"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+
+
+
 @app.route("/predict/synthid/probe", methods=["GET", "POST"])
 def predict_synthid_probe():
     """Layer 1 standalone probe endpoint."""
@@ -2363,10 +2796,28 @@ def predict_image_fast():
     if not _check_auth():
         return jsonify({"error": "Unauthorized: missing or invalid Bearer token."}), 401
 
+    started = time.time()
     data = request.get_json() or {}
-    img, raw_bytes, temp_file, err = _load_image_from_payload(data)
+    raw_bytes, err = _load_image_bytes(data)
     if err:
         return err
+
+    namespace = "image:fast" + _image_context_cache_key(data)
+    # Repeat scans are answered from the bytes alone: no PIL decode and no
+    # temp file before the cache is consulted.
+    hit = _image_exact_hit(raw_bytes, namespace, _no_cache_requested(data))
+    if hit is not None:
+        _record_scan(
+            "image", "image/fast", hit, 200,
+            cached=hit.get("cached"), content=raw_bytes,
+            source_url=data.get("image_url"), started=started,
+        )
+        return jsonify(hit), 200
+
+    try:
+        img, temp_file = _decode_image_bytes(raw_bytes)
+    except Exception as e:
+        return jsonify({"error": f"Failed to load image: {str(e)}"}), 400
 
     def _run_fast():
         try:
@@ -2433,7 +2884,13 @@ def predict_image_fast():
         resp, status = _cache_lookup_or_run(
             raw_bytes, "image", _run_fast, dhash_img=img,
             no_cache=_no_cache_requested(data),
-            key_namespace="image:fast" + _image_context_cache_key(data),
+            key_namespace=namespace,
+            exact_prechecked=True,
+        )
+        _record_scan(
+            "image", "image/fast", resp, status,
+            cached=resp.get("cached") if isinstance(resp, dict) else None,
+            content=raw_bytes, source_url=data.get("image_url"), started=started,
         )
         return jsonify(resp), status
     finally:
@@ -2468,9 +2925,26 @@ def predict_image_deep():
     if is_video_payload:
         return _cached_video_deep(data)
 
-    img, raw_bytes, temp_file, err = _load_image_from_payload(data)
+    started = time.time()
+    raw_bytes, err = _load_image_bytes(data)
     if err:
         return err
+
+    namespace = "image:deep" + _image_context_cache_key(data)
+    # Answer an exact hit before decoding: the cache key is the bytes.
+    hit = _image_exact_hit(raw_bytes, namespace, _no_cache_requested(data))
+    if hit is not None:
+        _record_scan(
+            "image", "image/deep", hit, 200,
+            cached=hit.get("cached"), content=raw_bytes,
+            source_url=data.get("image_url"), started=started,
+        )
+        return jsonify(hit), 200
+
+    try:
+        img, temp_file = _decode_image_bytes(raw_bytes)
+    except Exception as e:
+        return jsonify({"error": f"Failed to load image: {str(e)}"}), 400
 
     def _run_deep():
         try:
@@ -2489,9 +2963,16 @@ def predict_image_deep():
             # Layer 3: Frequency Forensics
             s3 = analyze_frequency_domain(img)
             # Layer 4: Semantic Neural Classifier & ViT Patch Heatmap
-            s4 = analyze_neural_and_heatmap(temp_file, img)
+            s4 = analyze_neural_and_heatmap(
+                temp_file, img, include_heatmap=bool(data.get("include_heatmap"))
+            )
             # Layer 5: SPAI Spectral Analysis (CVPR 2025)
             s5 = spai.detect(img)
+            # Layer 6: dataset-trained classifier (CLIP render head + pixel-
+            # statistics photo head). The off-the-shelf CNNSpot layer above is
+            # blind to viral brainrot renders; this layer is trained on the
+            # local Dataset/ corpus. Returns score None when unavailable.
+            s_learn = analyze_learned_image(img)
 
             # Pixel forensics & known fingerprints supplement
             pf = _pixel_forensics(temp_file) if temp_file else None
@@ -2524,7 +3005,8 @@ def predict_image_deep():
                     "metadata": s_meta["score"],
                     "frequency": s3["score"],
                     "neural": s4["score"],
-                    "spai": s5["score"]
+                    "spai": s5["score"],
+                    "learned": s_learn.get("score")
                 },
                 layer_reasons={
                     "synthid": [s1["reason"]] if s1.get("reason") else [],
@@ -2532,7 +3014,8 @@ def predict_image_deep():
                     "metadata": [s_meta["reason"]] if s_meta.get("reason") and s_meta.get("score") is not None else [],
                     "frequency": s3.get("reasons", []),
                     "neural": neural_reasons,
-                    "spai": s5.get("reasons", [])
+                    "spai": s5.get("reasons", []),
+                    "learned": s_learn.get("reasons", [])
                 },
                 is_video=False,
                 extra_data={
@@ -2543,6 +3026,7 @@ def predict_image_deep():
                     "neural_submodels": s4.get("submodels", {}),
                     "frequency_metrics": s3.get("metrics", {}),
                     "spai_metrics": s5.get("metrics", {}),
+                    "learned_metrics": s_learn.get("metrics", {}),
                     "metadata_source": s_meta.get("source"),
                     "metadata_markers": s_meta.get("markers", [])[:5],
                     **({"pf_strong": True} if pf_strong else {}),
@@ -2567,7 +3051,13 @@ def predict_image_deep():
         resp, status = _cache_lookup_or_run(
             raw_bytes, "image", _run_deep, dhash_img=img,
             no_cache=_no_cache_requested(data),
-            key_namespace="image:deep" + _image_context_cache_key(data),
+            key_namespace=namespace,
+            exact_prechecked=True,
+        )
+        _record_scan(
+            "image", "image/deep", resp, status,
+            cached=resp.get("cached") if isinstance(resp, dict) else None,
+            content=raw_bytes, source_url=data.get("image_url"), started=started,
         )
         return jsonify(resp), status
     finally:
@@ -2663,6 +3153,7 @@ def predict_storyscope():
     if not _check_auth():
         return jsonify({"error": "Unauthorized: missing or invalid Bearer token."}), 401
 
+    started = time.time()
     data = request.get_json() or {}
     text = (data.get("text") or "").strip()
     if not text:
@@ -2683,6 +3174,10 @@ def predict_storyscope():
         result = storyscope_detect(text, max_chars=int(max_chars), mode=mode)
         print(f"StoryScope[{mode}]: text={len(text)} chars -> score={result['score']} "
               f"({result['label']}), features={result['features_extracted']}/{result['features_total']}")
+        _record_scan(
+            "text", "text/storyscope", result, 200,
+            excerpt=text, content=text, started=started,
+        )
         return jsonify(result)
     except ValueError as e:
         return jsonify({"error": str(e)}), 422
@@ -2707,16 +3202,28 @@ def predict_text_dna():
     if not text:
         return jsonify({"error": "No text provided. Send JSON body: {\"text\": \"...\"}"}), 400
 
+    started = time.time()
     try:
         result = dna_detect.detect(text)
+        _record_scan(
+            "text", "text/dna", result, 200,
+            excerpt=text, content=text, started=started,
+        )
         return jsonify(result)
     except Exception as e:
         print(f"DNA-DetectLLM error: {e}")
-        return jsonify({
+        failure = {
             "score": 50,
             "label": "Inconclusive",
-            "reasons": [f"DNA-DetectLLM analysis failed: {e}"]
-        }), 500
+            "reasons": [f"DNA-DetectLLM analysis failed: {e}"],
+        }
+        # A failed detector still answered a request; log it as a 500 so
+        # outages are visible in the same table as the verdicts.
+        _record_scan(
+            "text", "text/dna", failure, 500,
+            excerpt=text, content=text, started=started,
+        )
+        return jsonify(failure), 500
 
 
 if __name__ == "__main__":

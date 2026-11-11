@@ -1188,7 +1188,10 @@ export default function Playground({ settings }: PlaygroundProps) {
         },
         body: JSON.stringify({
           image_url: targetUrl.startsWith('data:') ? null : targetUrl,
-          image_base64: targetUrl.startsWith('data:') ? targetUrl : null
+          image_base64: targetUrl.startsWith('data:') ? targetUrl : null,
+          // The visual overlay is only needed here; the API skips building it
+          // (~5-10 ms + ~134 KB per deep scan) unless this flag is set.
+          include_heatmap: true
         })
       })
       .then(async (response) => {

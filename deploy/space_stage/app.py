@@ -37,6 +37,7 @@ the mounted UI and the keepalive all live on one Gradio-launched ASGI app.
 from __future__ import annotations
 
 import os
+import re
 import time
 
 import spaces  # MUST be imported before torch / any CUDA-touching import
@@ -55,13 +56,135 @@ import server as rinse  # noqa: E402  (loads the full Flask app + all layers)
 # Server mode (its launch readiness probe hits /gradio_api/startup-events).
 # ---------------------------------------------------------------------------
 # gr.Server (not FastAPI) so .launch() below goes through Gradio's launch path.
-fastapp = gr.Server(title="RINSE AI-media detector")
+# Only these sites may call the API from a browser; loopback stays for local
+# development. server.py enforces the same list inside the Flask app - this
+# copy exists because the ASGI shell answers preflights before Flask is reached.
+ALLOWED_ORIGINS = [
+    "https://getrinse.tech",
+    "https://app.getrinse.tech",
+]
+ALLOWED_ORIGIN_REGEX = r"^http://(?:localhost|127\.0\.0\.1)(?::\d+)?$"
+_ALLOWED_ORIGIN_RE = re.compile(ALLOWED_ORIGIN_REGEX)
+
+
+class SiteCORS:
+    """Outermost CORS gate.
+
+    Gradio installs its own CustomCORSMiddleware, which treats any non-localhost
+    host as trusted and therefore echoes *any* Origin back with
+    ``Access-Control-Allow-Origin``. That made this Space advertise itself as
+    open to every website (its preflight answered 200 for arbitrary origins)
+    even though the Flask gate inside then rejected the request. This wrapper
+    runs outside Gradio's stack: unknown origins get no CORS grant at all and
+    their preflights are refused, while the allowlisted sites get their own
+    origin echoed back.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    @staticmethod
+    def allowed(origin: str) -> bool:
+        return origin in ALLOWED_ORIGINS or bool(
+            _ALLOWED_ORIGIN_RE.match(origin or "")
+        )
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        headers = {
+            key.decode("latin-1").lower(): value.decode("latin-1")
+            for key, value in scope["headers"]
+        }
+        origin = headers.get("origin", "")
+
+        if not origin:
+            await self.app(scope, receive, send)
+            return
+
+        if not self.allowed(origin):
+            preflight = (
+                scope["method"] == "OPTIONS"
+                and "access-control-request-method" in headers
+            )
+            if preflight:
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 403,
+                        "headers": [(b"content-length", b"0")],
+                    }
+                )
+                await send({"type": "http.response.body", "body": b""})
+                return
+
+            async def _strip(message):
+                # Drop the grant Gradio's middleware added; the body (usually
+                # Flask's 403) still reaches the caller, it just cannot be read
+                # cross-origin.
+                if message["type"] == "http.response.start":
+                    message["headers"] = [
+                        (k, v)
+                        for k, v in message.get("headers", [])
+                        if not k.decode("latin-1").lower().startswith("access-control-")
+                    ]
+                await send(message)
+
+            await self.app(scope, receive, _strip)
+            return
+
+        async def _grant(message):
+            if message["type"] == "http.response.start":
+                kept = [
+                    (k, v)
+                    for k, v in message.get("headers", [])
+                    if k.decode("latin-1").lower()
+                    not in ("access-control-allow-origin", "access-control-allow-credentials")
+                ]
+                kept.append((b"access-control-allow-origin", origin.encode("latin-1")))
+                kept.append((b"vary", b"Origin"))
+                message["headers"] = kept
+            await send(message)
+
+        await self.app(scope, receive, _grant)
+
+
+class GuardedServer(gr.Server):
+    """gr.Server whose entire ASGI stack sits behind SiteCORS.
+
+    The stack is wrapped on the first request instead of after launch(), so the
+    guard applies however the runtime starts the app - the Space's Gradio hot
+    reload path does not necessarily run this module's __main__ block, and a
+    post-launch assignment was silently skipped there.
+    """
+
+    _cors_guarded = False
+
+    async def __call__(self, scope, receive, send):
+        if not self._cors_guarded:
+            stack = self.middleware_stack
+            if stack is None:
+                stack = self.build_middleware_stack()
+            self.middleware_stack = stack = SiteCORS(stack)
+            self._cors_guarded = True
+            print(
+                "SiteCORS guard active - allowed origins:",
+                ", ".join(ALLOWED_ORIGINS),
+                flush=True,
+            )
+        await self.middleware_stack(scope, receive, send)
+
+
+fastapp = GuardedServer(title="RINSE AI-media detector")
 fastapp.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # the Flask app applies its own CORS config inside
+    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=ALLOWED_ORIGIN_REGEX,
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["POST", "GET", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 
@@ -70,6 +193,7 @@ def _root_info():
     """Landing probe: 200 at the Space root with pointers to UI and API."""
     return {
         "service": "RINSE AI-media detector",
+        "cors_guard": "sitecors-v1",
         "ui": "/ui/",
         "health": "/health",
         "api": ["/predict", "/predict/image/fast", "/predict/image/deep", "/predict/video/deep"],

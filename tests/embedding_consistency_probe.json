@@ -1,0 +1,107 @@
+[
+  {
+    "id": "ig-DecK8wQPTM7",
+    "label": "human",
+    "drift": 0.18828,
+    "spread": 0.16903,
+    "knn": 0.21799
+  },
+  {
+    "id": "ig-DfiLsNRIyuC",
+    "label": "human",
+    "drift": 0.2072,
+    "spread": 0.29428,
+    "knn": 0.36001
+  },
+  {
+    "id": "ig-Dfjip-CpM5X",
+    "label": "human",
+    "drift": 0.3288,
+    "spread": 0.2965,
+    "knn": 0.40599
+  },
+  {
+    "id": "ig-DfjkQIRhyhC",
+    "label": "human",
+    "drift": 0.23853,
+    "spread": 0.22467,
+    "knn": 0.19037
+  },
+  {
+    "id": "ig-DaAd4iqhbnj",
+    "label": "human",
+    "drift": 0.13831,
+    "spread": 0.15748,
+    "knn": 0.39491
+  },
+  {
+    "id": "ig-De0b6bppIPr",
+    "label": "human",
+    "drift": 0.14006,
+    "spread": 0.16236,
+    "knn": 0.43339
+  },
+  {
+    "id": "ig-human-post-01",
+    "label": "human",
+    "drift": 0.22116,
+    "spread": 0.26138,
+    "knn": 0.22406
+  },
+  {
+    "id": "ig-Dfko7WRJY9o",
+    "label": "ai",
+    "drift": 0.21674,
+    "spread": 0.20157,
+    "knn": 0.2569
+  },
+  {
+    "id": "ig-DdDKCrEKT3r",
+    "label": "ai",
+    "drift": 0.12536,
+    "spread": 0.17403,
+    "knn": 0.39565
+  },
+  {
+    "id": "ig-DeqTgBEhvAu",
+    "label": "ai",
+    "drift": 0.43543,
+    "spread": 0.35179,
+    "knn": 0.37758
+  },
+  {
+    "id": "ig-DfA6rNyKDRU",
+    "label": "ai",
+    "drift": 0.29678,
+    "spread": 0.27709,
+    "knn": 0.43701
+  },
+  {
+    "id": "ig-De1OcoyBkhZ",
+    "label": "ai",
+    "drift": 0.2504,
+    "spread": 0.25941,
+    "knn": 0.50198
+  },
+  {
+    "id": "ig-DecPhb-iBFr",
+    "label": "ai",
+    "drift": 0.21381,
+    "spread": 0.27434,
+    "knn": 0.44022
+  },
+  {
+    "id": "ig-DeWNa25MgzR",
+    "label": "ai",
+    "drift": 0.19577,
+    "spread": 0.22542,
+    "knn": 0.51915
+  },
+  {
+    "id": "ig-DeZyTL0t2Yi",
+    "label": "ai",
+    "drift": 0.23522,
+    "spread": 0.26875,
+    "knn": 0.42444
+  }
+]

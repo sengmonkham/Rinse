@@ -27,6 +27,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import threading
 import time
 from typing import Any
 
@@ -69,13 +70,30 @@ CREATE TABLE IF NOT EXISTS fetches (
 """
 
 
+_CONN = threading.local()
+_INIT_DONE = False
+_INIT_LOCK = threading.Lock()
+_PIPELINE_CACHE: tuple[tuple[Any, ...], str] | None = None
+
+
 def pipeline_version() -> str:
     """Hash of everything that changes detector behavior.
 
     Bumping = weight changes in voter.py, fingerprint DB rebuilds, or neural
     model swaps. When this value moves, all cached verdicts become invisible
     (stale rows age out via eviction).
+
+    The result is memoized for the life of the process (invalidation is a
+    restart, which is how a deploy happens) keyed on the learned-model file
+    stamp, so a cache hit does not re-hash a 53KB JSON file every time.
     """
+    global _PIPELINE_CACHE
+
+    stamp = _pipeline_stamp()
+    cached = _PIPELINE_CACHE
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+
     parts = []
     try:
         from forensics import voter
@@ -91,21 +109,65 @@ def pipeline_version() -> str:
     except Exception:  # noqa: BLE001
         parts.append("fpdb?")
     parts.append(os.environ.get("MODEL_NAME", "cnnspot"))
-    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+    try:
+        from forensics import learned_image
+
+        model_path = os.environ.get(
+            "LEARNED_IMAGE_MODEL", learned_image.DEFAULT_MODEL_PATH
+        )
+        with open(model_path, "rb") as fh:
+            parts.append(hashlib.sha256(fh.read()).hexdigest())
+    except Exception:  # noqa: BLE001
+        parts.append("learned-image?")
+    version = hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+    _PIPELINE_CACHE = (stamp, version)
+    return version
+
+
+def _pipeline_stamp() -> tuple[Any, ...]:
+    """Cheap inputs that only change when the detector stack changes."""
+    try:
+        from forensics import learned_image
+
+        model_path = os.environ.get(
+            "LEARNED_IMAGE_MODEL", learned_image.DEFAULT_MODEL_PATH
+        )
+        mtime = os.path.getmtime(model_path)
+    except Exception:  # noqa: BLE001
+        model_path, mtime = "", 0.0
+    return (model_path, mtime, os.environ.get("MODEL_NAME", "cnnspot"))
 
 
 def _connect() -> sqlite3.Connection:
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=5)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA foreign_keys=ON")
+    """One connection per worker thread, opened once.
+
+    The old code opened two connections per cache hit (one SELECT, one hit
+    UPDATE) and ran the CREATE TABLE script on every call. Werkzeug and the
+    Space's WSGI shim both serve from a thread pool, so a thread-local handle
+    is safe and removes the per-request open/PRAGMA cost.
+    """
+    conn = getattr(_CONN, "conn", None)
+    if conn is None:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        _CONN.conn = conn
     return conn
 
 
 def _init() -> None:
-    with _connect() as conn:
+    global _INIT_DONE
+    if _INIT_DONE:
+        return
+    with _INIT_LOCK:
+        if _INIT_DONE:
+            return
+        conn = _connect()
         conn.executescript(_SCHEMA)
+        conn.commit()
+        _INIT_DONE = True
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +209,9 @@ def get_verdict_exact(sha256_hex: str) -> dict[str, Any] | None:
         payload = json.loads(verdict_json)
     except Exception:  # noqa: BLE001
         return None
-    with _connect() as conn:
+    # Same connection as the SELECT: a hit is one read plus one small write.
+    conn = _connect()
+    with conn:
         conn.execute(
             "UPDATE verdicts SET last_hit_at = ?, hits = hits + 1 WHERE sha256 = ?",
             (now, sha256_hex),

@@ -34,7 +34,9 @@ def get_detectzoo_detector():
     return _DETECTZOO_DETECTOR if _DETECTZOO_DETECTOR is not False else None
 
 
-def generate_patch_heatmap(img: Image.Image, grid_size: int = 16) -> Tuple[List[List[float]], str]:
+def generate_patch_heatmap(
+    img: Image.Image, grid_size: int = 16, include_overlay: bool = True
+) -> Tuple[List[List[float]], Optional[str]]:
     """
     Divide image into a grid_size x grid_size patch matrix (e.g. 16x16 = 256 patches)
     and score each patch as a LOCAL ANOMALY relative to the frame's own statistics.
@@ -47,7 +49,10 @@ def generate_patch_heatmap(img: Image.Image, grid_size: int = 16) -> Tuple[List[
     region deviates from the frame's own texture/saturation norm, so each patch
     is compared against the frame-wide median instead.
 
-    Generate 2D matrix [0.0 - 1.0] and an alpha-blended overlay image as base64 PNG.
+    Generate 2D matrix [0.0 - 1.0] and, when ``include_overlay`` is true, an
+    alpha-blended overlay image as base64 PNG. The overlay is only needed by
+    the interactive Playground: building and PNG-encoding it costs ~5-10 ms
+    and ~134 KB per deep image, so API scans skip it unless asked.
     """
     w, h = img.size
     img_rgb = img.convert("RGB")
@@ -94,9 +99,13 @@ def generate_patch_heatmap(img: Image.Image, grid_size: int = 16) -> Tuple[List[
     heatmap_grid: List[List[float]] = []
     idx = 0
 
-    # Color overlay image (RGBA)
-    overlay = Image.new("RGBA", (grid_size, grid_size), (0, 0, 0, 0))
-    overlay_draw = ImageDraw.Draw(overlay)
+    # Color overlay image (RGBA) - only built when a client wants the visual.
+    overlay = (
+        Image.new("RGBA", (grid_size, grid_size), (0, 0, 0, 0))
+        if include_overlay
+        else None
+    )
+    overlay_draw = ImageDraw.Draw(overlay) if overlay is not None else None
 
     for row in range(grid_size):
         row_scores: List[float] = []
@@ -123,17 +132,20 @@ def generate_patch_heatmap(img: Image.Image, grid_size: int = 16) -> Tuple[List[
                 # Emerald / Transparent
                 r_c, g_c, b_c, a_c = 16, 185, 129, int((1.0 - patch_score) * 110)
 
-            overlay_draw.point((col, row), fill=(r_c, g_c, b_c, a_c))
+            if overlay_draw is not None:
+                overlay_draw.point((col, row), fill=(r_c, g_c, b_c, a_c))
 
         heatmap_grid.append(row_scores)
 
-    # Upscale overlay to match original aspect
-    overlay_resized = overlay.resize((w, h), Image.Resampling.BILINEAR)
+    overlay_b64: Optional[str] = None
+    if overlay is not None:
+        # Upscale overlay to match original aspect
+        overlay_resized = overlay.resize((w, h), Image.Resampling.BILINEAR)
 
-    # Export overlay as base64 PNG
-    buf = io.BytesIO()
-    overlay_resized.save(buf, format="PNG")
-    overlay_b64 = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        # Export overlay as base64 PNG
+        buf = io.BytesIO()
+        overlay_resized.save(buf, format="PNG")
+        overlay_b64 = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
     return heatmap_grid, overlay_b64
 
@@ -172,6 +184,7 @@ def analyze_neural_and_heatmap(
     img_path: str,
     img: Image.Image,
     allow_flat_render_vote: bool = True,
+    include_heatmap: bool = True,
 ) -> Dict[str, Any]:
     """
     Run Layer 4 neural classifier ensemble + 16x16 patch heatmap analysis.
@@ -217,7 +230,9 @@ def analyze_neural_and_heatmap(
             print(f"DetectZoo prediction failed: {e}")
 
     # 2. Patch anomaly heatmap (relative to the frame's own statistics).
-    heatmap_grid, heatmap_b64 = generate_patch_heatmap(img, grid_size=16)
+    heatmap_grid, heatmap_b64 = generate_patch_heatmap(
+        img, grid_size=16, include_overlay=include_heatmap
+    )
     flattened = [v for row in heatmap_grid for v in row]
     vit_patch_mean = float(np.mean(flattened))
     vit_patch_max = float(np.max(flattened))

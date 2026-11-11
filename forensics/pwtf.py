@@ -204,7 +204,8 @@ def _spectrum_statistics(spec: np.ndarray) -> Dict[str, float]:
     spec: (K, H, W) magnitude spectrum, K = number of positive bins.
     """
     K, H, W = spec.shape
-    total = spec.sum(axis=0) + 1e-9                       # energy per pixel
+    energy = spec.sum(axis=0)                             # energy per pixel
+    total = energy + 1e-9
     p = spec / total[None, :, :]                          # per-pixel freq distribution
 
     bins = np.arange(K, dtype=np.float64)
@@ -225,11 +226,28 @@ def _spectrum_statistics(spec: np.ndarray) -> Dict[str, float]:
     # Real footage: neighbouring pixels share one coherent motion/texture
     # model, so per-pixel spectra resemble the scene-mean spectrum.  Generated
     # flicker decorrelates pixels from that mean.
+    #
+    # STATIC-PIXEL GUARD (measured 2026-11-10). A pixel with no temporal
+    # variance has an all-zero spectrum, so its normalised distribution is 0/0
+    # and the clipped cosine similarity is exactly 0 - the same value as a
+    # maximally incoherent, regenerated pixel. Counting those pixels in the
+    # percentile makes the floor collapse to 0.00 whenever >5% of the frame is
+    # static (letterbox bars, a still background, painted-over regions).
+    # Measured: a real dance reel with 6.1% static pixels read p05 0.00 in 7 of
+    # 12 windows and this layer scored it 62 "synthetic"; restricting the
+    # percentile to pixels that carry temporal energy read 0.59-0.79 on the
+    # same windows. A static pixel has no temporal model to be incoherent
+    # with, so it is excluded from the floor rather than treated as evidence.
     g = spec.mean(axis=(1, 2))
     g_norm = g / (np.linalg.norm(g) + 1e-9)                # (K,)
     pix_norms = np.linalg.norm(p.reshape(K, -1), axis=0) + 1e-9
     cos_sim = (g_norm[:, None] * p.reshape(K, -1)).sum(axis=0) / pix_norms
     cos_sim = np.clip(cos_sim.reshape(H, W), 0.0, 1.0)
+    lacks_energy = energy <= 1e-6
+    if np.count_nonzero(~lacks_energy) >= 100:
+        coh_valid = cos_sim[~lacks_energy]
+    else:
+        coh_valid = cos_sim.ravel()
 
     # --- anomaly map & spatial concentration (Attention-Proposal analog) ---
     # A pixel whose spectrum decorrelates from the scene-mean carries a
@@ -292,8 +310,9 @@ def _spectrum_statistics(spec: np.ndarray) -> Dict[str, float]:
         "hf_share_mean": float(hf_share.mean()),
         "hf_share_p95": float(np.percentile(hf_share, 95)),
         "entropy_mean": float(entropy.mean()),
-        "coherence_mean": float(cos_sim.mean()),
-        "coherence_p05": float(np.percentile(cos_sim, 5)),
+        "coherence_mean": float(coh_valid.mean()),
+        "coherence_p05": float(np.percentile(coh_valid, 5)),
+        "static_pixel_fraction": float(lacks_energy.mean()),
         "anomaly_mean": float(anomaly.mean()),
         "anomaly_mass": anomaly_mass,
         "anomaly_concentration": concentration,

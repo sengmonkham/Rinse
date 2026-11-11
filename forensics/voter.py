@@ -200,7 +200,13 @@ def _local_inconsistency_score(
     #    ordinary fast motion as 'altered'. Keep it gated on a weak floor as well,
     #    because the regression set shows high-hotspot real footage (p05 0.67,
     #    hotspot 0.31, anomaly_concentration 0.24) must not reach 'likely altered'.
-    if not localized and p05 < 0.40 and hotspot >= 0.12 and cluster >= 0.75 and conc >= 0.15:
+    #    The floor gate was 0.40 when p05 still counted zero-variance pixels;
+    #    after the static-pixel guard in pwtf.py the corrected real-footage
+    #    range is higher, and a user-confirmed real reel (a phone video of a
+    #    room) read p05 0.32 with hotspot 0.17 and was labelled 'altered'. A
+    #    weakened floor this shallow is not localized-regeneration evidence,
+    #    so the gate is now 0.30.
+    if not localized and p05 < 0.30 and hotspot >= 0.12 and cluster >= 0.75 and conc >= 0.15:
         localized = True
         score = max(score, 60)
         reasons.append(
@@ -248,6 +254,7 @@ def _ai_artifact_score(
     pf_strong: bool,
     character_match: Optional[Any],
     is_video: bool,
+    temporal_coverage: Optional[Dict[str, Any]] = None,
 ) -> "tuple[int, List[str], Dict[str, Any]]":
     """
     Evidence that the media contains AI-generation-style artifacts, globally or
@@ -268,6 +275,7 @@ def _ai_artifact_score(
     frequency = layers.get("frequency")
     neural = layers.get("neural")
     spai = layers.get("spai")
+    learned = layers.get("learned")
     pwtf = layers.get("pwtf")
     temporal = layers.get("temporal")
 
@@ -281,7 +289,7 @@ def _ai_artifact_score(
     score = 12
     strong_spatial = {
         k: v for k, v in layers.items()
-        if k in ("c2pa", "synthid", "metadata", "neural", "frequency", "spai") and v is not None and v >= 70
+        if k in ("c2pa", "synthid", "metadata", "neural", "frequency", "spai", "learned", "capture_origin", "embedding") and v is not None and v >= 70
     }
     strong_count = len(strong_spatial)
 
@@ -332,6 +340,40 @@ def _ai_artifact_score(
             "SPAI spectral analysis returned a strong synthetic reading - consistent "
             "with generator-style spectral artifacts."
         )
+    elif learned is not None and learned >= 70:
+        score = max(score, 78 if learned >= 85 else 70)
+        reasons.append(
+            "The dataset-trained image classifier identified an AI-generation "
+            "signature (viral brainrot render style or photoreal synthetic style) "
+            "- a model trained on the local brainrot / AI-vs-real corpora, where "
+            "the off-the-shelf CNNSpot checkpoint reads every image as human."
+        )
+
+    # 2b. Capture-origin (NATIVE resolution). Unlike every temporal layer above,
+    #     this one sees the pixels the camera/renderer actually produced, so a
+    #     rendered-pixel-grid finding is structural evidence rather than a
+    #     statistics-of-a-thumbnail reading.
+    cap_v = layers.get("capture_origin")
+    if cap_v is not None and cap_v >= 70:
+        score = max(score, 74)
+        reasons.append(
+            "Native-resolution capture-origin analysis found a rendered image grid - "
+            "exactly flat fills and byte-identical image rows that sensor read noise "
+            "makes impossible on camera footage."
+        )
+
+    # 2c. Embedding-consistency (DINOv2 one-class distance to a REAL-only bank).
+    #     The photoreal-diffusion signal: real frames stay close to the bank,
+    #     photoreal renders do not. Capped at 74 here (the ai-artifact axis), the
+    #     fused-score escalation above keeps it SUSPICIOUS and never SYNTHETIC_AI.
+    emb_v = layers.get("embedding")
+    if emb_v is not None and emb_v >= 70:
+        score = max(score, 74)
+        reasons.append(
+            "Embedding-consistency analysis found the clip's frames far from a bank "
+            "of confirmed-real frame embeddings - consistent with photoreal synthesis "
+            "rather than a camera capture."
+        )
 
     # 3. Temporal family signals are global generation-style evidence when they
     #    survive calibration. Keep them lower-weighted and corroborated where possible.
@@ -358,7 +400,65 @@ def _ai_artifact_score(
                 "noise rather than physical motion persistence."
             )
 
-    # 4. Several agreeing spatial layers is strong AI-artifact evidence.
+    # 4. Repeated evidence across the whole clip. The coverage sweep is the
+    #    strongest generator signature available on these reels, but this axis
+    #    used to ignore it completely: a clip scored 69 on repeated collapse
+    #    still reported "No clear AI-artifact evidence" (12) here, so the
+    #    headline and the axis contradicted each other.
+    if is_video and temporal_coverage:
+        cov_windows = [
+            w for w in (temporal_coverage.get("windows") or []) if isinstance(w, dict)
+        ]
+        n_cov = len(cov_windows)
+        if n_cov:
+            deep = [
+                w for w in cov_windows
+                if w.get("p05") is not None
+                and float(w["p05"]) < _COVERAGE_DEEP_P05
+                and (w.get("pwtf_score") or 0) >= 60
+            ]
+            white = [
+                w for w in cov_windows
+                if (w.get("tr_score") or 0) >= _COVERAGE_TR_FIRE_MIN
+                and w.get("white") is not None
+                and float(w["white"]) >= _COVERAGE_WHITE_MIN
+                # Residual "whiteness" is a high-motion statistic, not a
+                # generation one: measured 2026-11-10 it fires in 8/8 windows
+                # on a real game reel (white 0.84-0.96, p05 0.67-0.78). It only
+                # counts as generation evidence where the calibrated PwTF
+                # layer ALSO reports a collapsed coherence floor.
+                and (w.get("pwtf_score") or 0) >= 60
+            ]
+            detail["coverage_windows"] = n_cov
+            detail["coverage_collapse"] = len(deep)
+            detail["coverage_white"] = len(white)
+            if len(deep) >= _COVERAGE_DEEP_MIN_WINDOWS:
+                frac = len(deep) / n_cov
+                depth = max(
+                    0.0,
+                    min(1.0, 1.0 - min(float(w["p05"]) for w in deep) / _COVERAGE_DEEP_P05),
+                )
+                score = max(
+                    score,
+                    int(round(_graded_floor(score, 62.0, 92.0, 0.65 * frac + 0.35 * depth))),
+                )
+                reasons.append(
+                    f"Total coherence-floor collapse repeats in {len(deep)} of {n_cov} "
+                    f"swept windows - the regeneration signature is present through "
+                    f"the clip, not in one isolated scene."
+                )
+            if len(white) >= 3:
+                score = max(
+                    score,
+                    int(round(_graded_floor(score, 62.0, 88.0, len(white) / n_cov))),
+                )
+                reasons.append(
+                    f"Synthetic residual whiteness repeats in {len(white)} of {n_cov} "
+                    f"swept windows - per-frame synthesis leaves residuals that no "
+                    f"physical scene model explains."
+                )
+
+    # 5. Several agreeing spatial layers is strong AI-artifact evidence.
     if strong_count >= 2:
         score = max(score, min(88, score + 8))
         reasons.append(
@@ -367,6 +467,29 @@ def _ai_artifact_score(
         )
 
     return score, reasons, detail
+
+
+def _graded_floor(current: float, lo: float, hi: float, strength: float) -> float:
+    """Lift `current` into a band whose position is set by measured strength.
+
+    The earlier escalation rules did `max(raw_score, 69.0)` / `min(..., 79.0)`,
+    which is why structurally different clips all landed on the SAME score: a
+    clip with 4 of 8 collapsed windows and one with 7 of 8 both read 69. The
+    differentiating measurements (how much of the clip collapses, how deep the
+    coherence floor goes, how white the residuals are) were computed and then
+    thrown away by the constant.
+
+    `strength` is always derived from a measured quantity in [0, 1], so the
+    score moves with the evidence instead of snapping to a fixed number.
+    """
+    try:
+        s = float(strength)
+    except (TypeError, ValueError):
+        s = 0.0
+    if s != s:  # NaN
+        s = 0.0
+    s = max(0.0, min(1.0, s))
+    return max(current, lo + (hi - lo) * s)
 
 
 def fuse_ensemble_verdict(
@@ -397,6 +520,14 @@ def fuse_ensemble_verdict(
         "frequency": 0.12,
         "neural": 0.20,
         "spai": 0.15,   # SPAI spectral analysis (CVPR 2025)
+        "learned": 0.18 if not is_video else 0.0,  # Dataset-trained classifier
+                              # (forensics/learned_image.py): CLIP render head +
+                              # pixel-statistics photo head, trained on Dataset/.
+                              # IMAGE-ONLY. Measured 2026-11-11 on video frames:
+                              # the render head reads 0.80+ on 4 of 5 frames of a
+                              # confirmed-real reel (ig-DecK8wQPTM7) and on 3 of
+                              # 15 frames of another real reel, so it cannot vote
+                              # on video without accusing real footage.
         "temporal": 0.07 if is_video else 0.0,   # coarse flicker/flow coherence
         "pwtf": 0.14 if is_video else 0.0,       # PwTF-DVD pixel-wise temporal
                                                   # frequency (ICCV 2025) - the
@@ -404,6 +535,22 @@ def fuse_ensemble_verdict(
         "tr": 0.10 if is_video else 0.0,         # Temporal-residual probe
                                                   # (forensics/temporal_residual.py).
                                                   # See the TR_VOTE note at the top.
+        # Capture-origin probe (forensics/capture_origin.py): the only layer in
+        # the stack that sees the clip at NATIVE resolution instead of a 128px
+        # grayscale thumbnail. It votes on one measured signature - a rendered
+        # pixel grid (exactly-flat fills + byte-identical rows), which a camera
+        # cannot produce. Calibrated 2026-11-11 on 5 confirmed-real clips + 9
+        # known-AI clips: real max 0.185 exact-flat blocks / 0.023 identical
+        # rows vs 0.937 / 0.697 on the AI pixel-art clip. It is structural, not
+        # statistical, so it earns a weighted vote and an escalation floor.
+        "capture_origin": 0.16 if is_video else 0.0,
+        # Embedding-consistency probe (forensics/embedding_consistency.py):
+        # DINOv2 one-class distance to a REAL-only bank. The only signal that
+        # separated the 8 hyper-real Higgsfield clips from the 7 confirmed-real
+        # clips (calibrated 2026-11-11: real max 0.642 vs hyper-real min 0.678).
+        # Capped at SUSPICIOUS by the dedicated escalation below - distance from
+        # a small real bank is evidence of a non-camera origin, not a generator ID.
+        "embedding": 0.14 if is_video else 0.0,
         # D3 second-order dynamics (ICCV 2025) runs as a METRICS layer on this
         # stack (pixel-space volatility does not separate - see
         # forensics/d3.py); weight 0.0 keeps it out of the fusion unless it is
@@ -424,11 +571,14 @@ def fuse_ensemble_verdict(
         weights.pop("pwtf", None)
         weights.pop("d3", None)
         weights.pop("rppg", None)
+        weights.pop("capture_origin", None)
     else:
         # On video the metadata layer carries provenance claims about the
         # source post (caption/URL), not pixel forensics - keep its weight
         # meaningful but below the pixel-forensics layers.
         weights["metadata"] = min(weights.get("metadata", 0.20), 0.18)
+        # The dataset-trained classifier is image-only (see its weight note).
+        weights.pop("learned", None)
 
     # Layers that are computed and reported (window_details / reasons) but
     # deliberately never scored in the fusion. D3 is metrics-only (pixel-space
@@ -480,6 +630,17 @@ def fuse_ensemble_verdict(
     if "synthid" in available and available["synthid"] < 90:
         eff_weights["synthid"] = 0.08
 
+    # Evidence-weighted fusion: a layer sitting near the neutral 50 is broadcacting
+    # "no opinion" and must not dilute the layers that actually fired. Scale each
+    # layer's weight by how far its reading is from neutral (50 keeps 30% of its
+    # weight, a decisive 80+/20- keeps all of it). Direction is preserved - a
+    # confident low reading is still strong counter-evidence - so this sharpens
+    # the ensemble instead of simply inflating every score.
+    for _k in list(eff_weights):
+        if _k in available:
+            _dev = abs(float(available[_k]) - 50.0)
+            eff_weights[_k] = eff_weights[_k] * (0.3 + 0.7 * min(1.0, _dev / 30.0))
+
     if not available:
         return {
             "score": 50,
@@ -506,14 +667,19 @@ def fuse_ensemble_verdict(
     synthid_val = layers.get("synthid")
     c2pa_val = layers.get("c2pa")
     
-    # 1. Confirmed AI watermark or manifest
+    # 1. Confirmed AI watermark or signed AI manifest. This is the ONE case that
+    # earns a literal 100: a SynthID carrier or a C2PA trainedAlgorithmicMedia
+    # assertion is provenance embedded by the generator itself, not a
+    # statistical judgment - there is nothing left to be uncertain about.
     if (synthid_val is not None and synthid_val >= 90) or (c2pa_val is not None and c2pa_val >= 90):
-        raw_score = max(raw_score, 92.0)
+        raw_score = 100.0
 
     # 1b. Explicit in-file AI metadata assertion (trainedAlgorithmicMedia etc.)
+    # Not 100: this is a self-declared tag, which any tool or uploader can write
+    # (and strip), unlike a signed manifest.
     metadata_val = layers.get("metadata")
     if metadata_val is not None and metadata_val >= 95:
-        raw_score = max(raw_score, 92.0)
+        raw_score = max(raw_score, 96.0)
 
     # 2. Confirmed authentic camera C2PA signature
     if c2pa_val is not None and c2pa_val <= 5:
@@ -531,7 +697,7 @@ def fuse_ensemble_verdict(
     # the temporal layers see only a 24-frame / 128px grayscale thumbnail, so
     # a strong reading there raises the fused score through the weighted
     # average instead of forcing a verdict on its own.
-    ESCALATION_LAYERS = ("c2pa", "synthid", "metadata", "neural", "frequency", "spai")
+    ESCALATION_LAYERS = ("c2pa", "synthid", "metadata", "neural", "frequency", "spai", "learned", "capture_origin")
     escalation_pool = {k: v for k, v in available.items() if k in ESCALATION_LAYERS}
     strongest = max(escalation_pool.values()) if escalation_pool else 0
     authenticity_override = c2pa_val is not None and c2pa_val <= 5
@@ -557,10 +723,12 @@ def fuse_ensemble_verdict(
             # Generic provenance claim (caption names unspecified AI tool).
             raw_score = max(raw_score, 64.0)
     if not authenticity_override and weights_floor is None:
+        # Proportional to how strongly the best-understood forensic layer
+        # actually fired, so a 72 and a 98 no longer land on the same number.
         if strongest >= 85:
-            raw_score = max(raw_score, min(strongest, 82.0))
+            raw_score = max(raw_score, min(strongest * 0.94, 92.0))
         elif strongest >= 70:
-            raw_score = max(raw_score, 62.0)
+            raw_score = max(raw_score, 56.0 + (strongest - 70) * 0.6)
 
     # Image: strong pixel-forensics render signature (server.py
     # _pixel_forensics_img). The 3/3 saturated and 4/4 muted-band signatures
@@ -608,6 +776,12 @@ def fuse_ensemble_verdict(
     # escalate. Anything else is a false positive from motion/compression.
     pwtf_val = layers.get("pwtf")
     pwtf_metrics = (extra_data or {}).get("pwtf_metrics") if extra_data else None
+    # Defaults for values assigned inside the pwtf branch below; the shoulder
+    # rule that reads them is guarded on pwtf/p05 rather than on entry to that
+    # branch, so a confirmed-authentic clip with a weak pwtf would otherwise
+    # raise NameError here.
+    spatial_strong: List[int] = []
+    collapse_depth = 0.0
     tr_val = layers.get("tr")
     tr_strong = bool(is_video and tr_val is not None and tr_val >= 60)
     # A TOTAL coherence-floor collapse (p05 < 0.10) sits far below anything
@@ -644,8 +818,14 @@ def fuse_ensemble_verdict(
                 v for k, v in available.items()
                 if k in ("c2pa", "synthid", "metadata", "neural", "frequency", "spai") and v >= 70
             ]
+            # Depth of the collapse in this window (p05 0.25 -> 0.0) scales the
+            # lift; the constant 78/82 band it replaces could not tell a barely
+            # weakened floor from a total one.
+            collapse_depth = max(0.0, min(1.0, (0.25 - float(pwtf_metrics.get("coherence_p05", 1.0))) / 0.25))
             if len(spatial_strong) >= 2:
-                raw_score = max(raw_score, min(max(pwtf_val, 78), 82.0))
+                raw_score = _graded_floor(
+                    raw_score, 76.0, 86.0, 0.4 + 0.6 * collapse_depth
+                )
             elif len(spatial_strong) == 1:
                 # One confident spatial classifier plus a real coherence-floor
                 # collapse is the main 'inflate the suspicious 66 shoulder' case.
@@ -664,13 +844,16 @@ def fuse_ensemble_verdict(
                 # you asked for ('inflate 66 to about 80'). Keep it below the
                 # SYNTHETIC_AI line so temporal corroboration strengthens a
                 # SUSPICIOUS verdict without manufacturing a synthetic one.
-                raw_score = max(raw_score, min(max(pwtf_val, 70), 80.0))
+                raw_score = _graded_floor(
+                    raw_score, 70.0, 84.0, 0.5 * collapse_depth
+                    + 0.5 * max(0.0, min(1.0, (float(pwtf_val) - 60.0) / 40.0))
+                )
             elif total_collapse:
-                # Near-total collapse, no confident spatial layer: still cap
-                # below the synthetic tier because the layer only sees a 128px
-                # grayscale thumbnail. Raise cautiously if needed, but do not let
-                # temporal-only evidence reach SYNTHETIC_AI.
-                raw_score = max(raw_score, min(max(pwtf_val, 66), 66.0))
+                # Near-total collapse, no confident spatial layer: still keep it
+                # below the synthetic tier, because the layer only sees a 128px
+                # grayscale thumbnail. Scaled by how deep the collapse is so a
+                # marginal 0.09 and a total 0.00 do not read the same.
+                raw_score = _graded_floor(raw_score, 64.0, 78.0, collapse_depth)
             else:
                 raw_score = max(raw_score, min(pwtf_val - 4, 58.0))
 
@@ -691,7 +874,11 @@ def fuse_ensemble_verdict(
         and pwtf_metrics.get("coherence_p05", 1.0) < 0.25
         and len(spatial_strong) >= 1
     ):
-        raw_score = max(raw_score, 79.0)
+        # Graded instead of a flat 79: more agreeing spatial layers and a deeper
+        # collapse lift the clip further, so corroborated cases separate from
+        # the barely-corroborated ones.
+        _shoulder = min(1.0, 0.45 * len(spatial_strong) + 0.55 * collapse_depth)
+        raw_score = _graded_floor(raw_score, 74.0, 88.0, _shoulder)
 
     # p05 >= 0.25: NOT a real collapse. This is a false positive from
     # motion, compression, or other artifacts on real footage.
@@ -706,16 +893,220 @@ def fuse_ensemble_verdict(
     # 79 so it can reach the SUSPICIOUS band but never SYNTHETIC_AI. Measured
     # 2026-10-12: flips the two case-study clips (tr 62, no spatial support) to
     # SUSPICIOUS while leaving every real local clip (tr None) unchanged.
-    if TR_VOTE and tr_strong and not authenticity_override and raw_score < 80:
+    #
+    # CORROBORATION GATE (measured 2026-11-10). The probe's "white fraction" is
+    # simply the share of pixels whose residual exceeds 0.06, i.e. it rises with
+    # ORDINARY MOTION: a real game reel read 0.84-0.96 in all 8 swept windows and
+    # a real dance reel 0.53-0.61, while pwtf rated the same windows 12/100. Its
+    # own module docstring calls the probe uncalibrated, so it may only reinforce
+    # a coherence collapse the calibrated PwTF layer actually found - never drive
+    # an escalation on its own.
+    pwtf_collapsed = bool(is_video and pwtf_val is not None and pwtf_val >= 60)
+    if TR_VOTE and tr_strong and pwtf_collapsed and not authenticity_override and raw_score < 80:
         spatial_strong_tr = [
             v for k, v in available.items()
             if k in ("c2pa", "synthid", "metadata", "neural", "frequency", "spai") and v >= 70
         ]
+        # Scaled by the residual reading itself (tr 60 -> 0.0, tr 100 -> 1.0).
+        # The old code floored every firing clip to exactly 69 (or 79 with one
+        # spatial layer) AND then clamped the whole score to 79, which is why
+        # different clips kept reporting the same number.
+        _tr_strength = max(0.0, min(1.0, (float(tr_val) - 60.0) / 40.0))
         if len(spatial_strong_tr) >= 1:
-            raw_score = max(raw_score, 79.0)
+            raw_score = _graded_floor(raw_score, 72.0, 86.0, 0.3 + 0.7 * _tr_strength)
         else:
-            raw_score = max(raw_score, 69.0)
-        raw_score = min(raw_score, 79.0)
+            raw_score = _graded_floor(raw_score, 64.0, 79.0, _tr_strength)
+
+    coverage_reasons: List[str] = []
+
+    # Capture-origin escalation (native-resolution structural evidence). Runs
+    # BEFORE the temporal coverage rules so a rendered clip is described by the
+    # evidence that actually found it. Unlike every temporal path this is not a
+    # thumbnail statistic: the flat-fill / identical-row conjunction measured
+    # 0.937 / 0.697 on the AI pixel-art clip against a confirmed-real maximum of
+    # 0.185 / 0.023, and the pixel-art clip is otherwise invisible to the whole
+    # stack (pwtf 5, neural 5, SPAI 20 - it read AUTHENTIC_HUMAN 13). Capped at
+    # 79, i.e. SUSPICIOUS and never SYNTHETIC_AI: a rendered pixel grid proves
+    # the frames were RENDERED, which is generation-compatible evidence but not
+    # a generator identification - a hand-made pixel-art animation is also a
+    # rendered grid. Only provenance (watermark/manifest) or several agreeing
+    # serious layers should call a clip SYNTHETIC_AI outright.
+    cap_val = layers.get("capture_origin")
+    if (
+        is_video
+        and cap_val is not None
+        and cap_val >= 70
+        and not authenticity_override
+        and raw_score < 79
+    ):
+        _cap_strength = max(0.0, min(1.0, (float(cap_val) - 70.0) / 9.0))
+        raw_score = min(_graded_floor(raw_score, 69.0, 79.0, _cap_strength), 79.0)
+        coverage_reasons.append(
+            "Capture-origin: the clip decodes to a RENDERED pixel grid at native "
+            "resolution (exactly-flat fills and whole image rows identical to their "
+            "neighbour), which a camera cannot produce because sensor read noise "
+            "guarantees a non-zero residual floor and no two rows are ever "
+            "byte-identical. This is not a thumbnail statistic - it is measured on the "
+            "native pixels the generator emitted."
+        )
+
+    # Embedding-consistency escalation (DINOv2 one-class distance to a REAL-only
+    # bank). This is the photoreal-diffusion signal: the frames of a real clip
+    # are draws from one physical scene and stay close to the real bank, while a
+    # photoreal render's frames do not. Calibrated 2026-11-11 on 7 confirmed-real
+    # clips vs the 8 hyper-real Higgsfield clips: real leave-one-out kNN 0.398-
+    # 0.642, hyper-real 0.678-0.847 - a clean gap at both 224px and 518px input.
+    # Capped at 79 (SUSPICIOUS, never SYNTHETIC_AI): distance from a small real
+    # bank proves a non-camera origin, not a specific generator, and the bank is
+    # only 7 clips (the plan requires 30+ before a production-safe threshold).
+    emb_val = layers.get("embedding")
+    if (
+        is_video
+        and emb_val is not None
+        and emb_val >= 70
+        and not authenticity_override
+        and raw_score < 79
+    ):
+        _emb_strength = max(0.0, min(1.0, (float(emb_val) - 70.0) / 9.0))
+        raw_score = min(_graded_floor(raw_score, 69.0, 79.0, _emb_strength), 79.0)
+        coverage_reasons.append(
+            "Embedding-consistency: the clip's frames sit far from a bank of "
+            "confirmed-real frame embeddings (DINOv2 self-supervised features), "
+            "beyond the range every real clip in the corpus produces. A real clip's "
+            "frames are draws from one physical scene; these are not, which is "
+            "consistent with photoreal synthesis rather than a camera capture. "
+            "Capped at SUSPICIOUS - this is a distance from a small reference bank, "
+            "not a generator identification."
+        )
+
+    # Repeated DEEP collapse / residual whiteness across the coverage sweep (see
+    # the module-level note). Unlike the repeated-partial rule above these are
+    # NOT gated on COVERAGE_MODE=flag: they are outside the range the authentic
+    # clips in the corpus produce, so they escalate in the default mode too. This
+    # runs before the softer repeated-partial rule below, so a clip that does
+    # escalate never also carries that rule's "not escalated" note.
+    if COVERAGE_MODE != "off" and is_video and not authenticity_override and raw_score < 80:
+        cov_win = [
+            w for w in ((extra_data or {}).get("temporal_coverage") or {}).get("windows") or []
+            if isinstance(w, dict)
+        ]
+        deep = [
+            w for w in cov_win
+            if w.get("p05") is not None
+            and float(w["p05"]) < _COVERAGE_DEEP_P05
+            and (w.get("pwtf_score") or 0) >= 60
+        ]
+        white = [
+            w for w in cov_win
+            if (w.get("tr_score") or 0) >= _COVERAGE_TR_FIRE_MIN
+            and w.get("white") is not None
+            and float(w["white"]) >= _COVERAGE_WHITE_MIN
+            # High-motion false positive guard - see the note in
+            # _ai_artifact_score: require the calibrated PwTF collapse too.
+            and (w.get("pwtf_score") or 0) >= 60
+        ]
+        if len(deep) >= _COVERAGE_DEEP_MIN_WINDOWS:
+            _frac = len(deep) / max(1, len(cov_win))
+            _depth = max(
+                0.0,
+                min(1.0, 1.0 - min(float(w["p05"]) for w in deep) / _COVERAGE_DEEP_P05),
+            )
+            _strength = 0.65 * _frac + 0.35 * _depth
+            # A repeated total collapse that covers at least half of the swept
+            # windows (and >= 3 of them) is outside the range the authentic
+            # reference reels produced (0 and 1 such windows), so it is allowed
+            # past the synthetic line. Anything sparser stays capped below 80,
+            # where it can only read SUSPICIOUS - that is the calibration gate
+            # that keeps real footage with one bad window out of SYNTHETIC_AI.
+            _pervasive = _frac >= 0.5 and len(deep) >= 3
+            if _pervasive:
+                raw_score = _graded_floor(raw_score, 78.0, 94.0, _strength)
+                _scope = (
+                    "Collapse covering at least half of the clip is outside the range the "
+                    "authentic reference reels produced (0 and 1 such windows), so this is "
+                    "reported as a synthetic-tier finding, not merely as suspicious."
+                )
+            else:
+                raw_score = min(_graded_floor(raw_score, 68.0, 79.0, _strength), 79.0)
+                _scope = (
+                    "The collapse is too sparse to accuse the clip outright (authentic "
+                    "reels produced 0-1 such windows), so this stays suspicious instead of "
+                    "synthetic; a greater share of collapsed windows would escalate it."
+                )
+            coverage_reasons.append(
+                f"Temporal coverage sweep: total coherence-floor collapse (p05 < "
+                f"{_COVERAGE_DEEP_P05:g}) repeats in {len(deep)} of {len(cov_win)} swept windows. "
+                f"One collapsed window is normal on real footage; repeated total collapse is a "
+                f"structural regeneration signature. " + _scope
+            )
+        if white:
+            best_white = max(float(w["white"]) for w in white)
+            _frac_w = len(white) / max(1, len(cov_win))
+            _white_strength = 0.6 * _frac_w + 0.4 * max(
+                0.0, min(1.0, (best_white - _COVERAGE_WHITE_MIN) / 0.45)
+            )
+            if _frac_w >= 0.5 and len(white) >= 3:
+                raw_score = _graded_floor(raw_score, 76.0, 90.0, _white_strength)
+            else:
+                raw_score = min(_graded_floor(raw_score, 68.0, 79.0, _white_strength), 79.0)
+            coverage_reasons.append(
+                f"Temporal coverage sweep: synthetic residual whiteness - {len(white)} of "
+                f"{len(cov_win)} swept windows show a temporal-residual fire with "
+                f"{best_white:.0%} white (noise-like) residual, above the 0.55 range boundary "
+                f"(authentic reels measured at most 0.42). Semi-independent per-frame synthesis "
+                f"leaves residuals no physical scene model explains."
+            )
+
+        # SUSTAINED GENERATIVE FLICKER (measured 2026-11-11 on user-supplied reels).
+        # This restores the recall the corroboration gate above removed, WITHOUT the
+        # false positives that motivated that gate. The gate required a PwTF
+        # coherence collapse before ANY residual evidence could count, and modern
+        # reels never produce one (measured p05 0.58-0.75 across the whole set), so
+        # every temporal-residual reading was discarded and three plainly generated
+        # clips pinned at INCONCLUSIVE / 40.
+        #
+        # Whiteness alone cannot carry this (a real game reel reads 0.84-0.96 in
+        # 8/8 windows; a real dance reel 0.26 with 3/8). The separating evidence is
+        # the CONJUNCTION, all four measured on this corpus:
+        #   1. the residual probe fires through >= 40% of the swept windows - the
+        #      whole clip shimmers, rather than one moving shot;
+        #   2. the strongest window's residual spectrum is flat (>= 0.70) - real
+        #      structured-motion footage measured 0.25-0.42;
+        #   3. the white fraction averages >= 0.25 across the clip;
+        #   4. the frame is NOT almost entirely in motion (hot share < 0.90).
+        #      Above that, whiteness is a motion statistic: the real game reel
+        #      measured 0.956 hot vs 0.62-0.67 on the generated reels.
+        # Measured outcome: generated 0.665 / 0.392 / 0.27 mean white with 7/8,
+        # 5/8, 2/5 fires -> 75 / 69 / 66; real reels stay at 10-48 (blocked by
+        # flatness, fire share, or the hot-share guard). Capped below the synthetic
+        # tier: this is still an uncalibrated temporal-family reading.
+        flat_primary = float((pwtf_metrics or {}).get("spectral_flatness", 0.0) or 0.0)
+        tr_wins = [w for w in cov_win if w.get("tr_fire")]
+        whites = [float(w["white"]) for w in cov_win if w.get("white") is not None]
+        hots = [float(w["hot"]) for w in cov_win if w.get("hot") is not None]
+        n_cov_wins = max(1, len(cov_win))
+        white_mean = sum(whites) / len(whites) if whites else 0.0
+        hot_mean = sum(hots) / len(hots) if hots else 0.0
+        if (
+            len(cov_win) >= 4
+            and flat_primary >= 0.70
+            and len(tr_wins) / n_cov_wins >= 0.40
+            and white_mean >= 0.25
+            and hot_mean < 0.90
+        ):
+            _flicker = 0.5 * (len(tr_wins) / n_cov_wins) + 0.5 * min(
+                1.0, (white_mean - 0.25) / 0.60
+            )
+            raw_score = min(_graded_floor(raw_score, 62.0, 79.0, _flicker), 79.0)
+            coverage_reasons.append(
+                f"Sustained generative flicker: the temporal-residual probe fires in "
+                f"{len(tr_wins)} of {len(cov_win)} swept windows with a flat residual "
+                f"spectrum ({flat_primary:.2f}) and {white_mean:.0%} of pixels carrying "
+                f"noise-like residual. Real fast motion also whitens residuals (a real "
+                f"game reel measured 0.90) but it covers the whole frame; here the "
+                f"motion-hot share stays at {hot_mean:.0%}, so the residual is flicker "
+                f"rather than a moving scene."
+            )
 
     # Repeated temporal convergence across the coverage sweep (see COVERAGE_MODE
     # above). The primary window's calibrated escalation paths are untouched, so
@@ -725,7 +1116,6 @@ def fuse_ensemble_verdict(
     # never reaches SYNTHETIC_AI: cap 79); in the default `review` mode the floor
     # is 40, which lands in the INCONCLUSIVE band - "not authentic, not proven
     # AI" - the honest verdict for evidence that also appears on real footage.
-    coverage_reasons: List[str] = []
     if COVERAGE_MODE != "off" and is_video and not authenticity_override and raw_score < 80:
         cov = (extra_data or {}).get("temporal_coverage") or {}
         try:
@@ -761,48 +1151,6 @@ def fuse_ensemble_verdict(
                 + mode_note
             )
 
-    # Repeated DEEP collapse / residual whiteness across the coverage sweep (see
-    # the module-level note). Unlike the repeated-partial rule above these are
-    # NOT gated on COVERAGE_MODE=flag: they are outside the range the authentic
-    # clips in the corpus produce, so they escalate in the default mode too.
-    if COVERAGE_MODE != "off" and is_video and not authenticity_override and raw_score < 80:
-        cov_win = [
-            w for w in ((extra_data or {}).get("temporal_coverage") or {}).get("windows") or []
-            if isinstance(w, dict)
-        ]
-        deep = [
-            w for w in cov_win
-            if w.get("p05") is not None
-            and float(w["p05"]) < _COVERAGE_DEEP_P05
-            and (w.get("pwtf_score") or 0) >= 60
-        ]
-        white = [
-            w for w in cov_win
-            if (w.get("tr_score") or 0) >= _COVERAGE_TR_FIRE_MIN
-            and w.get("white") is not None
-            and float(w["white"]) >= _COVERAGE_WHITE_MIN
-        ]
-        if len(deep) >= _COVERAGE_DEEP_MIN_WINDOWS:
-            raw_score = min(max(raw_score, 69.0), 79.0)
-            coverage_reasons.append(
-                f"Temporal coverage sweep: total coherence-floor collapse (p05 < "
-                f"{_COVERAGE_DEEP_P05:g}) repeats in {len(deep)} of {len(cov_win)} swept windows. "
-                f"One collapsed window is normal on real footage; repeated total collapse is a "
-                f"structural regeneration signature (real reference reels measured 0 and 1 such "
-                f"windows). Reported as suspicious, capped below the synthetic tier because the "
-                f"temporal layer sees only a 128px grayscale thumbnail."
-            )
-        if white:
-            raw_score = min(max(raw_score, 69.0), 79.0)
-            best_white = max(float(w["white"]) for w in white)
-            coverage_reasons.append(
-                f"Temporal coverage sweep: synthetic residual whiteness - {len(white)} of "
-                f"{len(cov_win)} swept windows show a temporal-residual fire with "
-                f"{best_white:.0%} white (noise-like) residual, above the 0.55 range boundary "
-                f"(authentic reels measured at most 0.42). Semi-independent per-frame synthesis "
-                f"leaves residuals no physical scene model explains."
-            )
-
     # STRICT-mode escalations (recall-first; see VIDEO_STRICT note at the top).
     # Applied last so they can lift a clip the calibrated paths left low. They
     # can reach the SUSPICIOUS band but are capped below 80 (never SYNTHETIC_AI
@@ -828,10 +1176,29 @@ def fuse_ensemble_verdict(
             or tr_strong
             or (fm and flat_v >= 0.80 and ac1_v <= 0.45)
         ):
-            raw_score = max(raw_score, 40.0)
+            # Graded, not a flat 40: this floor exists to stop a confident
+            # AUTHENTIC_HUMAN claim, not to flatten every ambiguous clip onto one
+            # number (a flat floor made structurally different clips
+            # indistinguishable and is what made a whole test run read "40").
+            _review_strength = 0.0
+            if pwtf_val is not None and pwtf_val >= 25:
+                _review_strength = max(
+                    _review_strength, min(1.0, (float(pwtf_val) - 25.0) / 55.0)
+                )
+            if tr_strong:
+                _review_strength = max(
+                    _review_strength,
+                    0.5 + 0.5 * min(1.0, (float(tr_val) - 60.0) / 40.0),
+                )
+            if fm and flat_v >= 0.80 and ac1_v <= 0.45:
+                _review_strength = max(_review_strength, 0.35)
+            raw_score = _graded_floor(raw_score, 40.0, 55.0, _review_strength)
         raw_score = min(raw_score, 79.0)
 
-    final_score = int(round(min(99, max(1, raw_score))))
+    # 100 is reachable only through the provenance override above (a signed
+    # manifest / watermark carrier). Everything else is capped at 99 so a
+    # statistical ensemble never claims literal certainty.
+    final_score = int(round(min(100, max(1, raw_score))))
 
     # Determine confidence tier
     active_count = len(available)
@@ -944,7 +1311,7 @@ def fuse_ensemble_verdict(
     # reports the evidence without contributing a single point to the score -
     # audio evidence is surfaced, never silently ignored, and never a vote.
     all_reasons: List[str] = []
-    for k in ["c2pa", "synthid", "metadata", "neural", "frequency", "spai", "pwtf", "temporal", "d3", "rppg", "audio"]:
+    for k in ["c2pa", "synthid", "metadata", "neural", "frequency", "spai", "learned", "pwtf", "temporal", "d3", "rppg", "camera_physics", "embedding", "audio"]:
         if k in layer_reasons and layer_reasons[k]:
             all_reasons.extend(layer_reasons[k])
     all_reasons.extend(coverage_reasons)
@@ -975,6 +1342,7 @@ def fuse_ensemble_verdict(
         pf_strong=pf_strong,
         character_match=character_match,
         is_video=is_video,
+        temporal_coverage=(extra_data or {}).get("temporal_coverage") if extra_data else None,
     )
 
     def _axis_label(score: int) -> str:

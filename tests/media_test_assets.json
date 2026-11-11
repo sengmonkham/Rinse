@@ -149,7 +149,7 @@
       "source": "instagram",
       "shortcode": "DecPhb-iBFr",
       "url": "https://www.instagram.com/p/DecPhb-iBFr/",
-      "note": ""
+      "note": "user-supplied: AI hyper-realistic (Higgsfield-style photoreal video)"
     },
     {
       "id": "ig-DeYtYl5xfeY",
@@ -185,7 +185,7 @@
       "source": "instagram",
       "shortcode": "DeZyTL0t2Yi",
       "url": "https://www.instagram.com/p/DeZyTL0t2Yi/",
-      "note": ""
+      "note": "user-supplied: AI hyper-realistic (Higgsfield-style photoreal video)"
     },
     {
       "id": "ig-DeWNa25MgzR",
@@ -194,7 +194,7 @@
       "source": "instagram",
       "shortcode": "DeWNa25MgzR",
       "url": "https://www.instagram.com/p/DeWNa25MgzR/",
-      "note": ""
+      "note": "user-supplied: AI hyper-realistic (Higgsfield-style photoreal video)"
     },
     {
       "id": "ig-DeYXdryix3c",
@@ -474,6 +474,123 @@
       "shortcode": "DeppmpCtSnZ",
       "url": "https://www.instagram.com/p/DeppmpCtSnZ/",
       "note": ""
+    },
+    {
+      "id": "ig-DfiLsNRIyuC",
+      "label": "human",
+      "kind": "video",
+      "source": "instagram (reels path)",
+      "shortcode": "DfiLsNRIyuC",
+      "url": "https://www.instagram.com/reels/DfiLsNRIyuC/",
+      "note": "user-confirmed real 2026-11-10 (false-positive regression: read SYNTHETIC from the static-pixel p05 bug)"
+    },
+    {
+      "id": "ig-Dfjip-CpM5X",
+      "label": "human",
+      "kind": "video",
+      "source": "instagram (reels path)",
+      "shortcode": "Dfjip-CpM5X",
+      "url": "https://www.instagram.com/reels/Dfjip-CpM5X/",
+      "note": "user-confirmed real 2026-11-10 (game footage; false-positive regression: read SYNTHETIC from the residual-whiteness rule)"
+    },
+    {
+      "id": "ig-DfjkQIRhyhC",
+      "label": "human",
+      "kind": "video",
+      "source": "instagram (reels path)",
+      "shortcode": "DfjkQIRhyhC",
+      "url": "https://www.instagram.com/reels/DfjkQIRhyhC/",
+      "note": "user-confirmed real 2026-11-10 (dancing; false-positive regression: read SYNTHETIC from the static-pixel p05 bug)"
+    },
+    {
+      "id": "ig-Dfh7Q8UE2kC",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "Dfh7Q8UE2kC",
+      "url": "https://www.instagram.com/p/Dfh7Q8UE2kC/",
+      "note": "user-supplied 2026-11-11: AI realistic, bad/unrealistic movements"
+    },
+    {
+      "id": "ig-DfhvopJP2Bc",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DfhvopJP2Bc",
+      "url": "https://www.instagram.com/p/DfhvopJP2Bc/",
+      "note": "user-supplied 2026-11-11: AI pixel-art video"
+    },
+    {
+      "id": "ig-DaAd4iqhbnj",
+      "label": "human",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DaAd4iqhbnj",
+      "url": "https://www.instagram.com/p/DaAd4iqhbnj/",
+      "note": "user-supplied 2026-11-11: authentic human-shot video (negative control)"
+    },
+    {
+      "id": "ig-DemvObrt28O",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DemvObrt28O",
+      "url": "https://www.instagram.com/p/DemvObrt28O/",
+      "note": "user-supplied 2026-11-11: AI realistic; the post is audience-restricted, so yt-dlp may not resolve it"
+    },
+    {
+      "id": "ig-De0b6bppIPr",
+      "label": "human",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "De0b6bppIPr",
+      "url": "https://www.instagram.com/p/De0b6bppIPr/",
+      "note": "user-supplied 2026-11-11: authentic footage that CONTAINS AI-generated images (quoted stills), so the clip-level verdict is not 'fully authentic'"
+    },
+    {
+      "id": "ig-DfA6rNyKDRU",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DfA6rNyKDRU",
+      "url": "https://www.instagram.com/p/DfA6rNyKDRU/",
+      "note": "user-supplied 2026-11-11: AI hyper-realistic with believable movements (hardest positive)"
+    },
+    {
+      "id": "ig-De1OcoyBkhZ",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "De1OcoyBkhZ",
+      "url": "https://www.instagram.com/p/De1OcoyBkhZ/",
+      "note": "user-supplied 2026-11-11: AI realistic with bad movements (Higgsfield-style hyper-real)"
+    },
+    {
+      "id": "ig-Dfko7WRJY9o",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "Dfko7WRJY9o",
+      "url": "https://www.instagram.com/p/Dfko7WRJY9o/",
+      "note": "user-supplied: AI hyper-realistic (Higgsfield-style photoreal video)"
+    },
+    {
+      "id": "ig-DdDKCrEKT3r",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DdDKCrEKT3r",
+      "url": "https://www.instagram.com/p/DdDKCrEKT3r/",
+      "note": "user-supplied: AI hyper-realistic (Higgsfield-style photoreal video)"
+    },
+    {
+      "id": "ig-DeqTgBEhvAu",
+      "label": "ai",
+      "kind": "video",
+      "source": "instagram",
+      "shortcode": "DeqTgBEhvAu",
+      "url": "https://www.instagram.com/p/DeqTgBEhvAu/",
+      "note": "user-supplied: AI hyper-realistic (Higgsfield-style photoreal video)"
     }
   ]
 }

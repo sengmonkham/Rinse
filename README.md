@@ -19,6 +19,7 @@ To connect the extension or sandbox to deep learning models:
 1. Install requirements: pip install flask flask-cors requests pillow detectzoo
 2. Start the server: python server.py
 3. Toggle to Cloud Mode in the settings panel to route scanning requests through this backend.
+4. Optional: every scan the server serves is recorded — see [Scan log](#scan-log-every-scan-stored-where-the-cache-already-lives) for where it's stored and how to read or export it (CLI, `sqlite3`, or `GET /scans/stats`, `/scans/recent`, `/scans/export`).
 
 ## StoryScope: narrative-structure AI fiction detection
 
@@ -89,6 +90,27 @@ On macOS, xgboost needs the OpenMP runtime (`brew install libomp`) — the shipp
 ### Attribution
 
 StoryScope's taxonomy, extraction prompts and dataset are by Jenna Russell, Rishanth Rajendhran, Chau Minh Pham, Mohit Iyyer and John Wieting (University of Maryland / Google DeepMind), released under MIT. This implementation ports the extraction pipeline and retrains the classifier on the released feature matrix.
+
+## Dataset-trained image classifier (viral brainrot / AI-vs-real)
+
+The off-the-shelf CNNSpot checkpoint does not recognize viral AI image styles: measured on the local corpus it labels **every** brainrot render and every photoreal AI image `human` with ~1.0 confidence. The image path therefore adds a classifier trained on `Dataset/`:
+
+| Head | Features | Trained on | Held-out AUC | Recall / FPR |
+|---|---|---|---|---|
+| render | CLIP ViT-B/32 embedding | brainrot renders vs real photos | **0.9955** | 96.2% at 1.9% FPR |
+| photo | 60 pixel statistics | photoreal AI vs real photos | 0.8904 | 51.2% at 1.0% FPR |
+
+Held-out means grouped cross-validation: unseen AI/real categories and unseen contiguous brainrot clip blocks (consecutive frames are near-duplicates, so a random split would leak). The layer reports as `learned` in `breakdown`, maps its probability through a calibrated curve that only lets high-confidence readings escalate (>= 0.85 → the 62-95 band; below that it stays under 62), and abstains when the model file or CLIP weights are unavailable instead of voting.
+
+On the 120-image evaluation sample (`scripts/eval_image_dataset.py --per-group 40`), brainrot images called AI rose from **17.5% to 100%** (95% `SYNTHETIC_AI`), the photoreal AI set from 12.5% to 32.5%, and the real-photo false-positive set was **unchanged** (17.5%, the same seven photos as before).
+
+Retrain/export with:
+
+```bash
+.venv/bin/python scripts/train_image_classifier.py   # writes forensics/models/image_classifier.json
+```
+
+Inference is numpy-only (`forensics/learned_image.py`); CLIP is loaded lazily on the first deep image scan (~10 s) and cached, adding ~0.1 s per image. Set `LEARNED_IMAGE_CLIP=0` to run with the pixel-statistics head alone, or `LEARNED_IMAGE_MODEL=/path/to/model.json` to override the weights path. The image-only layer does not vote on video.
 
 ## PwTF-DVD: pixel-wise temporal frequency video detection (ICCV 2025)
 
@@ -267,6 +289,96 @@ Then set the extension's API URL to `https://<your-username>-<your-space-name>.h
 (the extension accepts the bare host) and the API key to the same `API_KEY`.
 Endpoints and payloads are unchanged. Full guide plus Render / Oracle / Azure
 targets: [`deploy/DEPLOY.md`](deploy/DEPLOY.md).
+
+## Scan log: every scan, stored where the cache already lives
+
+The [scan cache](docs/brainrot-characters-and-scan-cache-plan.md) answers "have I
+seen this before?". The scan log answers the other question: *what has the
+detector been asked to judge, and what did it say?* Every text, image and video
+scan the server serves — cache hit or miss, success or detector failure — is
+recorded in SQLite by [`forensics/scan_log.py`](forensics/scan_log.py).
+
+**Storage.** Stdlib `sqlite3`, one file: `cache/scan_log.db` (override the
+directory with `SCAN_LOG_DIR`). WAL journal mode, one short-lived connection per
+operation, no new dependency and no extra service. It sits next to
+`cache/scan_cache.db` and follows the same rules: the write path is best-effort
+and a logging failure can never turn a good scan into an error response.
+
+**What a row holds.**
+
+| column | contents |
+| --- | --- |
+| `kind`, `source`, `status`, `cached` | `text`/`image`/`video`, endpoint, HTTP status, `exact`/`near` cache hit |
+| `score`, `tier`, `label`, `confidence` | normalized verdict fields, whichever shape the detector returned |
+| `human_likely` | 1 when the verdict cleared the content (`AUTHENTIC_HUMAN` for media, `Human-written` for text) |
+| `content_sha256`, `content_chars` | hash + size of what was scanned |
+| `excerpt` | text scans only, bounded (default 4,000 chars) |
+| `source_host`, `source_sha256` | image/video URL host + URL hash — never the full URL |
+| `ip_hash`, `user_agent`, `latency_ms` | salted 16-char IP hash (abuse clustering without storing addresses) |
+| `verdict` | compact verdict JSON — base64 overlays, frames and inline media are dropped |
+
+**Retention** is biased toward the human corpus, because that is the part worth
+keeping (false-positive evidence and a whitelist corpus): non-human scans live
+90 days, human-likely scans 365, and the row cap trims non-human rows first. A
+burst of AI scans can never push human samples out.
+
+| env var | default |
+| --- | --- |
+| `SCAN_LOG` | `1` (set `0` to disable) |
+| `SCAN_LOG_DIR` | `<repo>/cache` |
+| `SCAN_LOG_EXCERPT_CHARS` | `4000` |
+| `SCAN_LOG_RETENTION_DAYS` | `90` |
+| `SCAN_LOG_HUMAN_RETENTION_DAYS` | `365` |
+| `SCAN_LOG_MAX_ROWS` | `200000` |
+| `SCAN_LOG_SALT` | `rinse-scan-log` — set it in production |
+
+**Getting at the log.** Three ways, depending on where you are.
+
+*On the machine that holds the DB* (local dev, or an SSH/Render shell):
+
+```bash
+.venv/bin/python scripts/scan_log_cli.py stats
+.venv/bin/python scripts/scan_log_cli.py recent --human --text
+.venv/bin/python scripts/scan_log_cli.py export --out human-corpus.jsonl --human-only
+
+# or straight SQL
+sqlite3 cache/scan_log.db "SELECT kind, label, score, datetime(created_at,'unixepoch')
+  FROM scans WHERE human_likely = 1 ORDER BY id DESC LIMIT 20;"
+```
+
+*From anywhere over HTTP* — the same Bearer token the detectors use, so this
+works against a deployed Space/Render instance with no shell access:
+
+```bash
+BASE=https://<your-space>.hf.space
+AUTH="Authorization: Bearer $API_KEY"
+
+curl -s -H "$AUTH" "$BASE/scans/stats" | jq
+curl -s -H "$AUTH" "$BASE/scans/recent?human=1&kind=text&include_text=1&limit=20" | jq '.scans[] | {created_at, score, label, excerpt}'
+curl -s -H "$AUTH" "$BASE/scans/export?human=1" -o human-corpus.jsonl        # whole match, streamed JSONL
+curl -s -H "$AUTH" "$BASE/scans/export?kind=video&include_verdict=1" -o video.jsonl
+```
+
+*Pulling it into a durable place* — the HTTP export is the path off an
+ephemeral instance; schedule the JSONL download (cron, GitHub Action, a laptop
+alarm) and keep the file, or import it into Postgres:
+
+```bash
+curl -s -H "$AUTH" "$BASE/scans/export?since=$(date -u -d '7 days ago' +%s)" -o this-week.jsonl
+```
+
+Process stdout (the `print()` lines like `StoryScope[heuristic]: ... -> score=`) is
+separate from the log table: it goes to the platform's log viewer (Render →
+Logs, HF Space → Container logs), while every row described above is in SQLite
+and readable with the commands here.
+
+**Durability.** `cache/` lives on the instance's local disk, so it survives
+restarts on a machine with a persistent volume, and it does *not* survive an
+ephemeral one (Render/Fly/HF Spaces free tiers rebuild the filesystem on
+deploy). `scripts/scan_log_cli.py export` is the escape hatch: run it on a
+schedule and keep the JSONL somewhere durable, or point a future
+`scan_log` writer at Postgres. The log is a record, not a source of truth —
+exports are the durable artifact.
 
 ## Dev Tools
 

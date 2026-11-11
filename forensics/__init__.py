@@ -7,6 +7,7 @@ Forensic ensemble:
 - Layer 4: Semantic Neural & ViT Patch Heatmap Classifier
 - Layer 5: Spatio-Temporal Coherence Video Analyzer
 - Layer 6: PwTF-DVD Pixel-wise Temporal Frequency Analyzer (ICCV 2025)
+- Layer 7: Dataset-trained image classifier (brainrot / AI-vs-real corpora)
 """
 
 from .synthid import probe_synthid_watermark
@@ -16,6 +17,9 @@ from .frequency import analyze_frequency_domain
 from .neural import analyze_neural_and_heatmap
 from .temporal import analyze_video_temporal_coherence
 from .pwtf import analyze_pixel_temporal_frequency
+from .learned_image import analyze_learned_image
+from .camera_physics import analyze_camera_physics
+from .embedding_consistency import analyze_embedding_consistency
 from .voter import fuse_ensemble_verdict
 
 __all__ = [
@@ -26,5 +30,8 @@ __all__ = [
     "analyze_neural_and_heatmap",
     "analyze_video_temporal_coherence",
     "analyze_pixel_temporal_frequency",
+    "analyze_learned_image",
+    "analyze_camera_physics",
+    "analyze_embedding_consistency",
     "fuse_ensemble_verdict",
 ]
