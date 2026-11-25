@@ -2618,7 +2618,7 @@ def health():
         "cache_enabled": _CACHE_ENABLED,
         "scan_log_enabled": bool(scan_log is not None and scan_log.ENABLED),
         "auth_required": bool(API_KEY),
-        "layers": ["synthid", "c2pa", "frequency", "neural", "learned", "temporal", "pwtf", "d3"],
+        "layers": ["synthid", "c2pa", "frequency", "neural", "learned", "temporal", "pwtf", "d3", "capture_origin", "camera_physics", "embedding"],
         "endpoints": [
             "/predict", "/predict/image/fast", "/predict/image/deep",
             "/predict/video/deep", "/predict/storyscope", "/predict/text/dna",

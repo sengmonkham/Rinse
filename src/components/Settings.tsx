@@ -13,6 +13,7 @@ import {
   Key
 } from 'lucide-react';
 import type { AppSettings, SubscriptionState } from '../App';
+import { DEPLOYED_API_URL, LOCAL_API_URL } from '../backend';
 
 interface SettingsProps {
   settings: AppSettings;
@@ -30,7 +31,8 @@ export default function Settings({ settings, onSave, subscription, onSyncSubscri
   const [autoImageOverlays, setAutoImageOverlays] = useState(settings.autoImageOverlays !== undefined ? settings.autoImageOverlays : false);
   const [showVibecodedAlert, setShowVibecodedAlert] = useState(settings.showVibecodedAlert !== undefined ? settings.showVibecodedAlert : false);
   const [apiMode, setApiMode] = useState(settings.apiMode);
-  const [apiUrl, setApiUrl] = useState(settings.apiUrl);
+  const [apiTarget, setApiTarget] = useState(settings.apiTarget || 'deployed');
+  const [apiUrl, setApiUrl] = useState(settings.apiUrl || DEPLOYED_API_URL);
   const [apiKey, setApiKey] = useState(settings.apiKey);
   const [webAppUrl, setWebAppUrl] = useState(settings.webAppUrl || 'http://localhost:3000');
   const [authToken, setAuthToken] = useState(settings.authToken || '');
@@ -49,6 +51,7 @@ export default function Settings({ settings, onSave, subscription, onSyncSubscri
       autoImageOverlays: autoImageOverlays,
       showVibecodedAlert: showVibecodedAlert,
       apiMode: apiMode,
+      apiTarget: apiTarget,
       apiUrl: apiUrl,
       apiKey: apiKey,
       webAppUrl: webAppUrl,
@@ -67,8 +70,9 @@ export default function Settings({ settings, onSave, subscription, onSyncSubscri
     setInlineBadges(true);
     setAutoImageOverlays(false);
     setShowVibecodedAlert(false);
-    setApiMode('local');
-    setApiUrl('');
+    setApiMode('cloud');
+    setApiTarget('deployed');
+    setApiUrl(DEPLOYED_API_URL);
     setApiKey('');
     setWebAppUrl('http://localhost:3000');
     setAuthToken('');
@@ -89,6 +93,7 @@ export default function Settings({ settings, onSave, subscription, onSyncSubscri
         autoImageOverlays: autoImageOverlays,
         showVibecodedAlert: showVibecodedAlert,
         apiMode: apiMode,
+        apiTarget: apiTarget,
         apiUrl: apiUrl,
         apiKey: apiKey,
         webAppUrl: webAppUrl,
@@ -443,14 +448,40 @@ export default function Settings({ settings, onSave, subscription, onSyncSubscri
 
           {apiMode === 'cloud' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
-              <input
-                type="text"
-                className="input-text"
-                placeholder="https://api.rinse.app/v1"
-                value={apiUrl}
-                onChange={(e) => setApiUrl(e.target.value)}
-                style={{ fontSize: '11.5px' }}
-              />
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={() => setApiTarget('deployed')}
+                  className={`btn ${apiTarget === 'deployed' ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ flex: '1', padding: '6px 10px', fontSize: '11px', boxShadow: 'none' }}
+                >
+                  Deployed Server
+                </button>
+                <button
+                  onClick={() => setApiTarget('local')}
+                  className={`btn ${apiTarget === 'local' ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ flex: '1', padding: '6px 10px', fontSize: '11px', boxShadow: 'none' }}
+                >
+                  Local Server
+                </button>
+              </div>
+
+              {apiTarget === 'deployed' ? (
+                <input
+                  type="text"
+                  className="input-text"
+                  placeholder={DEPLOYED_API_URL}
+                  value={apiUrl}
+                  onChange={(e) => setApiUrl(e.target.value)}
+                  style={{ fontSize: '11.5px' }}
+                  title="Deployed server URL"
+                />
+              ) : (
+                <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                  Local server:{' '}
+                  <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 4px', borderRadius: '3px' }}>{LOCAL_API_URL}</code>
+                </div>
+              )}
+
               <input
                 type="password"
                 className="input-text"
@@ -459,6 +490,11 @@ export default function Settings({ settings, onSave, subscription, onSyncSubscri
                 onChange={(e) => setApiKey(e.target.value)}
                 style={{ fontSize: '11.5px' }}
               />
+
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', lineHeight: 1.45 }}>
+                The deployed Space requires its <strong>API_KEY</strong> secret as the bearer token above.
+                A local server accepts any token when it runs without <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 4px', borderRadius: '3px' }}>API_KEY</code> set.
+              </div>
               <div style={{ fontSize: '10px', color: 'var(--text-muted)', lineHeight: 1.45 }}>
                 Text sandbox uses the <strong>StoryScope</strong> narrative detector (arXiv:2604.03136) via
                 <code style={{ background: 'rgba(0,0,0,0.25)', padding: '1px 4px', borderRadius: '3px' }}> /predict/storyscope</code>.

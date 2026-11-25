@@ -57,6 +57,14 @@ BRAINROT_BLOCKS = 8
 # only escalates at p>=0.955, i.e. the ~2% FPR operating point.
 HEAD_C = 0.02
 
+# The photoreal head is the hardest: its two classes are "photoreal AI" vs
+# "real stock photos", which overlap far more than brainrot-vs-real. A stronger
+# C is needed so the head can fit modern photoreal exemplars; measured
+# GroupKFold AUC ~0.80 at C=0.1 (vs ~0.78 at C=0.02) and it is the only head
+# that separates the "images it cant detect" exemplars. The runtime caps its
+# score at SUSPICIOUS to keep a photoreal mistake out of the SYNTHETIC tier.
+PHOTOREAL_C = 0.1
+
 
 def _extract_stats_one(path: str) -> list[float] | None:
     try:
@@ -159,25 +167,25 @@ def load_clip(entries: list[dict], refresh: bool) -> np.ndarray:
     return E
 
 
-def _head_model():
+def _head_model(C: float = HEAD_C):
     from sklearn.linear_model import LogisticRegression
     from sklearn.pipeline import make_pipeline
     from sklearn.preprocessing import StandardScaler
 
     return make_pipeline(
         StandardScaler(),
-        LogisticRegression(C=HEAD_C, class_weight="balanced", max_iter=6000),
+        LogisticRegression(C=C, class_weight="balanced", max_iter=6000),
     )
 
 
-def evaluate_head(X: np.ndarray, y: np.ndarray, sources: np.ndarray) -> dict:
+def evaluate_head(X: np.ndarray, y: np.ndarray, sources: np.ndarray, C: float = HEAD_C) -> dict:
     """Grouped 5-fold OOF predictions + operating-point metrics."""
     from sklearn.metrics import roc_auc_score
     from sklearn.model_selection import GroupKFold
 
     oof = np.zeros(len(y), dtype=np.float64)
     for tr, te in GroupKFold(n_splits=min(5, len(set(sources)))).split(X, y, groups=sources):
-        model = _head_model().fit(X[tr], y[tr])
+        model = _head_model(C).fit(X[tr], y[tr])
         oof[te] = model.predict_proba(X[te])[:, 1]
 
     pos, neg = oof[y == 1], oof[y == 0]
@@ -233,6 +241,7 @@ def main() -> int:
 
     render_mask = np.isin(groups, ["brainrot", "real"])
     photo_mask = np.isin(groups, ["ai", "real"])
+    photoreal_mask = np.isin(groups, ["ai", "real"])
 
     print("Evaluating render head (CLIP, brainrot vs real)...")
     render = evaluate_head(X_clip[render_mask], y[render_mask], sources[render_mask])
@@ -240,6 +249,11 @@ def main() -> int:
     print("Evaluating photo head (pixel stats, ai-dataset vs real)...")
     photo = evaluate_head(X_stats[photo_mask], y[photo_mask], sources[photo_mask])
     print(f"  {photo['metrics']}")
+    print("Evaluating photoreal head (CLIP, ai-dataset vs real)...")
+    photoreal = evaluate_head(
+        X_clip[photoreal_mask], y[photoreal_mask], sources[photoreal_mask], C=PHOTOREAL_C
+    )
+    print(f"  {photoreal['metrics']}")
 
     # Combined operating profile on the whole corpus, using the same calibrated
     # probability -> score mapping the runtime layer uses. Real images appear in
@@ -271,6 +285,7 @@ def main() -> int:
     print("\nTraining final heads on all data...")
     render_model = _head_model().fit(X_clip[render_mask], y[render_mask])
     photo_model = _head_model().fit(X_stats[photo_mask], y[photo_mask])
+    photoreal_model = _head_model(PHOTOREAL_C).fit(X_clip[photoreal_mask], y[photoreal_mask])
 
     payload = {
         "version": 2,
@@ -287,14 +302,22 @@ def main() -> int:
                 **export_head(photo_model),
                 "metrics": photo["metrics"],
             },
+            "photoreal": {
+                "features": "clip_vit_b32_openai",
+                **export_head(photoreal_model),
+                "metrics": photoreal["metrics"],
+                "score_cap": 79,
+            },
         },
         "corpus": by_group,
         "combined_metrics": combined_metrics,
         "notes": (
-            "Trained on Dataset/: brainrot + Ai_generated_dataset = AI, "
-            "real_dataset = real photos. Held-out metrics use GroupKFold over "
-            "sources (categories / contiguous brainrot clip blocks). Inference "
-            "is numpy-only in forensics/learned_image.py."
+            "Trained on Dataset/: brainrot + Ai_generated_dataset (incl. "
+            "photoreal/ exemplars) = AI, real_dataset = real photos. Held-out "
+            "metrics use GroupKFold over sources (categories / contiguous "
+            "brainrot clip blocks). Three heads: render (CLIP, brainrot), photo "
+            "(pixel stats, ai-dataset), photoreal (CLIP, ai-dataset, score-capped "
+            "at 79). Inference is numpy-only in forensics/learned_image.py."
         ),
     }
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)

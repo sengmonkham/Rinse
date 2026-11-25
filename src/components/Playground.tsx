@@ -17,6 +17,7 @@ import {
   Activity
 } from 'lucide-react';
 import type { AppSettings } from '../App';
+import { resolveApiBase } from '../backend';
 
 const humanizerDatabase: Record<string, { term: string; suggestions: string[]; explanation: string }> = {
   "delve": {
@@ -278,44 +279,18 @@ export default function Playground({ settings }: PlaygroundProps) {
       sensitivity: 50, showInlineBadges: true, autoImageOverlays: false,
       showVibecodedAlert: false, apiMode: "local", apiUrl: "", apiKey: ""
     };
-    if (activeForStory.apiMode === 'cloud') {
-      const base = (activeForStory.apiUrl || 'http://localhost:5001/predict').replace(/\/predict$/, '');
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        ...(activeForStory.apiKey ? { 'Authorization': `Bearer ${activeForStory.apiKey}` } : {})
-      };
+    // The dashboard is the backend sandbox: text analysis always goes through
+    // StoryScope and DNA-DetectLLM, whatever engine mode the popup is set to.
+    const base = resolveApiBase(activeForStory);
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(activeForStory.apiKey ? { 'Authorization': `Bearer ${activeForStory.apiKey}` } : {})
+    };
 
-      // StoryScope for longer texts (needs 200+ chars for narrative features)
-      if (textToScan.length >= 200) {
-        setStoryScope({ loading: true, results: null, error: null });
-        fetch(`${base}/predict/storyscope`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ text: textToScan })
-        })
-          .then(async (response) => {
-            if (!response.ok) {
-              const body = await response.json().catch(() => ({}));
-              throw new Error(body.error || `Server returned status ${response.status}`);
-            }
-            return response.json();
-          })
-          .then((data) => {
-            setStoryScope({ loading: false, results: data as StoryScopeResults, error: null });
-          })
-          .catch((err) => {
-            setStoryScope({
-              loading: false,
-              results: null,
-              error: `StoryScope unavailable: ${err.message}`
-            });
-          });
-      }
-
-      // DNA-DetectLLM for ALL text lengths (works from 20 chars)
-      // Complements StoryScope on short texts, supplements on long texts
-      setDnaDetect({ loading: true, results: null, error: null });
-      fetch(`${base}/predict/text/dna`, {
+    // StoryScope for longer texts (needs 200+ chars for narrative features)
+    if (textToScan.length >= 200) {
+      setStoryScope({ loading: true, results: null, error: null });
+      fetch(`${base}/predict/storyscope`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ text: textToScan })
@@ -328,16 +303,42 @@ export default function Playground({ settings }: PlaygroundProps) {
           return response.json();
         })
         .then((data) => {
-          setDnaDetect({ loading: false, results: data, error: null });
+          setStoryScope({ loading: false, results: data as StoryScopeResults, error: null });
         })
         .catch((err) => {
-          setDnaDetect({
+          setStoryScope({
             loading: false,
             results: null,
-            error: `DNA-DetectLLM unavailable: ${err.message}`
+            error: `StoryScope unavailable: ${err.message}`
           });
         });
     }
+
+    // DNA-DetectLLM for ALL text lengths (works from 20 chars)
+    // Complements StoryScope on short texts, supplements on long texts
+    setDnaDetect({ loading: true, results: null, error: null });
+    fetch(`${base}/predict/text/dna`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ text: textToScan })
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.error || `Server returned status ${response.status}`);
+        }
+        return response.json();
+      })
+      .then((data) => {
+        setDnaDetect({ loading: false, results: data, error: null });
+      })
+      .catch((err) => {
+        setDnaDetect({
+          loading: false,
+          results: null,
+          error: `DNA-DetectLLM unavailable: ${err.message}`
+        });
+      });
 
     setTimeout(() => {
       setAnalyzing(false);
@@ -1176,55 +1177,52 @@ export default function Playground({ settings }: PlaygroundProps) {
       apiKey: ""
     };
 
-    if (activeSettings.apiMode === 'cloud') {
-      const base = (activeSettings.apiUrl || 'http://localhost:5001').replace(/\/predict(\/.*)?$/, '').replace(/\/$/, '');
-      const endpoint = `${base}/predict/image/${effectiveMode}`;
-      
-      fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(activeSettings.apiKey ? { 'Authorization': `Bearer ${activeSettings.apiKey}` } : {})
-        },
-        body: JSON.stringify({
-          image_url: targetUrl.startsWith('data:') ? null : targetUrl,
-          image_base64: targetUrl.startsWith('data:') ? targetUrl : null,
-          // The visual overlay is only needed here; the API skips building it
-          // (~5-10 ms + ~134 KB per deep scan) unless this flag is set.
-          include_heatmap: true
-        })
+    // Always send the image link/upload to the backend; local canvas heuristics
+    // run only when the request itself fails.
+    const base = resolveApiBase(activeSettings);
+    const endpoint = `${base}/predict/image/${effectiveMode}`;
+    
+    fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(activeSettings.apiKey ? { 'Authorization': `Bearer ${activeSettings.apiKey}` } : {})
+      },
+      body: JSON.stringify({
+        image_url: targetUrl.startsWith('data:') ? null : targetUrl,
+        image_base64: targetUrl.startsWith('data:') ? targetUrl : null,
+        // The visual overlay is only needed here; the API skips building it
+        // (~5-10 ms + ~134 KB per deep scan) unless this flag is set.
+        include_heatmap: true
       })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(`Server returned status ${response.status}: ${response.statusText}`);
-        }
-        return response.json();
-      })
-      .then((data) => {
-        setAnalyzing(false);
-        setImgResults({
-          score: data.score,
-          confidence: data.confidence || "HIGH",
-          tier: data.tier || (data.score >= 80 ? "SYNTHETIC_AI" : data.score >= 69 ? "SUSPICIOUS" : data.score >= 55 ? "UNCERTAIN" : data.score >= 35 ? "INCONCLUSIVE" : "AUTHENTIC_HUMAN"),
-          breakdown: data.breakdown || {},
-          layers_active: data.layers_active || ["synthid", "c2pa", "frequency", "neural"],
-          mode: data.mode || effectiveMode,
-          heatmap_grid: data.heatmap_grid,
-          heatmap_overlay_base64: data.heatmap_overlay_base64,
-          synthetic_patches_count: data.synthetic_patches_count,
-          frequency_metrics: data.frequency_metrics,
-          reasons: data.reasons || ["Analyzed via RINSE 5-Layer Forensic Ensemble."],
-          url: targetUrl
-        });
-      })
-      .catch((err) => {
-        console.warn("Cloud detector unreachable, executing local canvas heuristics:", err.message);
-        runLocalImageForensics(targetUrl, effectiveMode);
+    })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`Server returned status ${response.status}: ${response.statusText}`);
+      }
+      return response.json();
+    })
+    .then((data) => {
+      setAnalyzing(false);
+      setImgResults({
+        score: data.score,
+        confidence: data.confidence || "HIGH",
+        tier: data.tier || (data.score >= 80 ? "SYNTHETIC_AI" : data.score >= 69 ? "SUSPICIOUS" : data.score >= 55 ? "UNCERTAIN" : data.score >= 35 ? "INCONCLUSIVE" : "AUTHENTIC_HUMAN"),
+        breakdown: data.breakdown || {},
+        layers_active: data.layers_active || ["synthid", "c2pa", "frequency", "neural"],
+        mode: data.mode || effectiveMode,
+        heatmap_grid: data.heatmap_grid,
+        heatmap_overlay_base64: data.heatmap_overlay_base64,
+        synthetic_patches_count: data.synthetic_patches_count,
+        frequency_metrics: data.frequency_metrics,
+        reasons: data.reasons || ["Analyzed via RINSE 5-Layer Forensic Ensemble."],
+        url: targetUrl
       });
-      return;
-    }
-
-    runLocalImageForensics(targetUrl, effectiveMode);
+    })
+    .catch((err) => {
+      console.warn("Cloud detector unreachable, executing local canvas heuristics:", err.message);
+      runLocalImageForensics(targetUrl, effectiveMode);
+    });
   };
 
   const runLocalImageForensics = (targetUrl: string, mode: 'deep' | 'fast') => {
@@ -1454,153 +1452,128 @@ export default function Playground({ settings }: PlaygroundProps) {
     };
 
     // ---------- Cloud mode: real spatio-temporal ensemble on the backend ----------
-    if (activeSettings.apiMode === 'cloud') {
-      const base = (activeSettings.apiUrl || 'http://localhost:5001').replace(/\/predict(\/.*)?$/, '').replace(/\/$/, '');
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        ...(activeSettings.apiKey ? { 'Authorization': `Bearer ${activeSettings.apiKey}` } : {})
-      };
+    // Video analysis always runs on the backend — the full spatio-temporal
+    // ensemble (PwTF-DVD, temporal coherence, spatial forensics).
+    const base = resolveApiBase(activeSettings);
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(activeSettings.apiKey ? { 'Authorization': `Bearer ${activeSettings.apiKey}` } : {})
+    };
 
-      // Device upload: hand the raw file to the server so IT samples frames
-      // (uniform, up to 24) instead of the browser's 12-frame canvas pass. For
-      // files too large to ship over JSON, fall back to browser extraction.
-      let body: Record<string, unknown> = {};
-      if (file) {
-        if (file.size <= 60 * 1024 * 1024) {
-          const b64 = await fileToBase64(file).catch(() => '');
-          if (b64) {
-            body = { video_base64: b64 };
-          }
+    // Device upload: hand the raw file to the server so IT samples frames
+    // (uniform, up to 24) instead of the browser's 12-frame canvas pass. For
+    // files too large to ship over JSON, fall back to browser extraction.
+    let body: Record<string, unknown> = {};
+    if (file) {
+      if (file.size <= 60 * 1024 * 1024) {
+        const b64 = await fileToBase64(file).catch(() => '');
+        if (b64) {
+          body = { video_base64: b64 };
         }
-        if (!body.video_base64) {
-          const frames = await extractVideoFrames(targetUrl).catch(() => [] as string[]);
-          if (frames.length > 0) {
-            body = { frames_base64: frames };
-          } else {
-            setAnalyzing(false);
-            setVideoError('This file is too large to send for analysis and its frames could not be sampled in the browser. Try a shorter clip (under ~60MB).');
-            return;
-          }
-        }
-      } else if (targetUrl.startsWith('http')) {
-        // Link analysis. Try to sample frames client-side first (works for
-        // same-origin / CORS-enabled direct .mp4/.webm URLs). If the browser
-        // cannot decode it - social pages like Instagram Reels, CORS-protected
-        // CDNs - send the URL to the server: it downloads direct file links
-        // itself and resolves social-platform pages via yt-dlp when installed.
+      }
+      if (!body.video_base64) {
         const frames = await extractVideoFrames(targetUrl).catch(() => [] as string[]);
         if (frames.length > 0) {
           body = { frames_base64: frames };
         } else {
-          body = { video_url: targetUrl };
+          setAnalyzing(false);
+          setVideoError('This file is too large to send for analysis and its frames could not be sampled in the browser. Try a shorter clip (under ~60MB).');
+          return;
         }
+      }
+    } else if (targetUrl.startsWith('http')) {
+      // Link analysis. Try to sample frames client-side first (works for
+      // same-origin / CORS-enabled direct .mp4/.webm URLs). If the browser
+      // cannot decode it - social pages like Instagram Reels, CORS-protected
+      // CDNs - send the URL to the server: it downloads direct file links
+      // itself and resolves social-platform pages via yt-dlp when installed.
+      const frames = await extractVideoFrames(targetUrl).catch(() => [] as string[]);
+      if (frames.length > 0) {
+        body = { frames_base64: frames };
       } else {
+        body = { video_url: targetUrl };
+      }
+    } else {
+      setAnalyzing(false);
+      setVideoError('Could not load this video to sample frames. Paste a video URL or upload a file.');
+      return;
+    }
+
+    try {
+      const res = await fetch(`${base}/predict/video/deep`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+        let msg = `Server returned HTTP ${res.status}.`;
+        let isSocialPlatformError = false;
+        try {
+          const j = await res.json();
+          if (j && j.error) {
+            msg = j.error + (j.hint ? ` (${j.hint})` : '');
+            // Detect yt-dlp missing errors for social platforms
+            if (j.error && (
+              j.error.includes('social platform') ||
+              j.error.includes('yt-dlp') ||
+              j.error.includes('Instagram') ||
+              j.error.includes('TikTok')
+            )) {
+              isSocialPlatformError = true;
+            }
+          }
+        } catch { /* non-JSON error body */ }
         setAnalyzing(false);
-        setVideoError('Could not load this video to sample frames. Paste a video URL or upload a file.');
+        if (isSocialPlatformError) {
+          setVideoError(
+            msg + ' To analyze this video, install yt-dlp on the server (pip install -U yt-dlp), or download the video file and upload it directly.'
+          );
+        } else {
+          setVideoError(msg);
+        }
         return;
       }
-
-      try {
-        const res = await fetch(`${base}/predict/video/deep`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(body)
-        });
-        if (!res.ok) {
-          let msg = `Server returned HTTP ${res.status}.`;
-          let isSocialPlatformError = false;
-          try {
-            const j = await res.json();
-            if (j && j.error) {
-              msg = j.error + (j.hint ? ` (${j.hint})` : '');
-              // Detect yt-dlp missing errors for social platforms
-              if (j.error && (
-                j.error.includes('social platform') ||
-                j.error.includes('yt-dlp') ||
-                j.error.includes('Instagram') ||
-                j.error.includes('TikTok')
-              )) {
-                isSocialPlatformError = true;
-              }
-            }
-          } catch { /* non-JSON error body */ }
-          setAnalyzing(false);
-          if (isSocialPlatformError) {
-            setVideoError(
-              msg + ' To analyze this video, install yt-dlp on the server (pip install -U yt-dlp), or download the video file and upload it directly.'
-            );
-          } else {
-            setVideoError(msg);
-          }
-          return;
-        }
-        const data = await res.json();
-        
-        // Sanity check: if the backend returns a score without real temporal
-        // analysis evidence, treat it as an error rather than showing a misleading
-        // number. Specifically: if the score is in the suspicious range (45-65)
-        // but there's no valid PwTF coherence data, this may be a false positive.
-        const hasRealTemporalAnalysis =
-          data.pwtf_metrics &&
-          data.pwtf_metrics.coherence_p05 !== undefined &&
-          data.pwtf_metrics.coherence_p05 !== null;
-        
-        // If score is in the suspicious range and we don't have real temporal
-        // coherence data, it's likely a false positive or unverified result.
-        if (
-          data.score >= 55 &&
-          data.score <= 65 &&
-          !hasRealTemporalAnalysis
-        ) {
-          setAnalyzing(false);
-          setVideoError(
-            'The video analysis returned a suspicious score but could not verify ' +
-            'the temporal coherence data needed to confirm AI generation. ' +
-            'This may be a false positive from video compression or motion. ' +
-            'For accurate results, upload the video file directly.'
-          );
-          return;
-        }
-        
-        // Additional check: if PwTF reports high score but coherence floor
-        // is NOT collapsed (p05 >= 0.25), don't show as AI - it's a false positive.
-        if (
-          data.score >= 55 &&
-          data.score < 70 &&
-          hasRealTemporalAnalysis &&
-          data.pwtf_metrics.coherence_p05 >= 0.25
-        ) {
-          setAnalyzing(false);
-          setVideoResults({
-            score: data.score,
-            confidence: 'LOW',
-            tier: 'INCONCLUSIVE',
-            breakdown: data.breakdown || {},
-            layers_active: data.layers_active || [],
-            frames_analyzed: data.frames_analyzed || 0,
-            frame_scores: data.frame_scores || [],
-            temporal_flicker_energy: data.temporal_flicker_energy,
-            motion_residual_variance: data.motion_residual_variance,
-            pwtf_metrics: data.pwtf_metrics,
-            pwtf_spectrum_bins: data.pwtf_spectrum_bins || 0,
-            pwtf_frames_analyzed: data.pwtf_frames_analyzed || 0,
-            heatmap_overlay_base64: data.heatmap_overlay_base64,
-            reasons: [
-              ...(data.reasons || []),
-              'Note: Temporal frequency analysis detected artifacts, but the coherence floor (p05=' + 
-              data.pwtf_metrics.coherence_p05.toFixed(2) + ') did not collapse. This pattern is consistent with ' +
-              'compression/motion artifacts on real footage, not AI generation. Score marked INCONCLUSIVE.'
-            ],
-            url: targetUrl
-          });
-          return;
-        }
-        
+      const data = await res.json();
+      
+      // Sanity check: if the backend returns a score without real temporal
+      // analysis evidence, treat it as an error rather than showing a misleading
+      // number. Specifically: if the score is in the suspicious range (45-65)
+      // but there's no valid PwTF coherence data, this may be a false positive.
+      const hasRealTemporalAnalysis =
+        data.pwtf_metrics &&
+        data.pwtf_metrics.coherence_p05 !== undefined &&
+        data.pwtf_metrics.coherence_p05 !== null;
+      
+      // If score is in the suspicious range and we don't have real temporal
+      // coherence data, it's likely a false positive or unverified result.
+      if (
+        data.score >= 55 &&
+        data.score <= 65 &&
+        !hasRealTemporalAnalysis
+      ) {
+        setAnalyzing(false);
+        setVideoError(
+          'The video analysis returned a suspicious score but could not verify ' +
+          'the temporal coherence data needed to confirm AI generation. ' +
+          'This may be a false positive from video compression or motion. ' +
+          'For accurate results, upload the video file directly.'
+        );
+        return;
+      }
+      
+      // Additional check: if PwTF reports high score but coherence floor
+      // is NOT collapsed (p05 >= 0.25), don't show as AI - it's a false positive.
+      if (
+        data.score >= 55 &&
+        data.score < 70 &&
+        hasRealTemporalAnalysis &&
+        data.pwtf_metrics.coherence_p05 >= 0.25
+      ) {
         setAnalyzing(false);
         setVideoResults({
           score: data.score,
-          confidence: data.confidence || "HIGH",
-          tier: data.tier || (data.score >= 80 ? "SYNTHETIC_AI" : data.score >= 69 ? "SUSPICIOUS" : data.score >= 55 ? "UNCERTAIN" : data.score >= 35 ? "INCONCLUSIVE" : "AUTHENTIC_HUMAN"),
+          confidence: 'LOW',
+          tier: 'INCONCLUSIVE',
           breakdown: data.breakdown || {},
           layers_active: data.layers_active || [],
           frames_analyzed: data.frames_analyzed || 0,
@@ -1610,29 +1583,43 @@ export default function Playground({ settings }: PlaygroundProps) {
           pwtf_metrics: data.pwtf_metrics,
           pwtf_spectrum_bins: data.pwtf_spectrum_bins || 0,
           pwtf_frames_analyzed: data.pwtf_frames_analyzed || 0,
-          d3_metrics: data.d3_metrics,
-          straighten_metrics: data.straighten_metrics,
           heatmap_overlay_base64: data.heatmap_overlay_base64,
-          reasons: data.reasons || [],
+          reasons: [
+            ...(data.reasons || []),
+            'Note: Temporal frequency analysis detected artifacts, but the coherence floor (p05=' + 
+            data.pwtf_metrics.coherence_p05.toFixed(2) + ') did not collapse. This pattern is consistent with ' +
+            'compression/motion artifacts on real footage, not AI generation. Score marked INCONCLUSIVE.'
+          ],
           url: targetUrl
         });
-      } catch (err) {
-        setAnalyzing(false);
-        setVideoError(`Could not reach the RINSE backend at ${base}. Is the server running? (${(err as Error).message})`);
+        return;
       }
-      return;
+      
+      setAnalyzing(false);
+      setVideoResults({
+        score: data.score,
+        confidence: data.confidence || "HIGH",
+        tier: data.tier || (data.score >= 80 ? "SYNTHETIC_AI" : data.score >= 69 ? "SUSPICIOUS" : data.score >= 55 ? "UNCERTAIN" : data.score >= 35 ? "INCONCLUSIVE" : "AUTHENTIC_HUMAN"),
+        breakdown: data.breakdown || {},
+        layers_active: data.layers_active || [],
+        frames_analyzed: data.frames_analyzed || 0,
+        frame_scores: data.frame_scores || [],
+        temporal_flicker_energy: data.temporal_flicker_energy,
+        motion_residual_variance: data.motion_residual_variance,
+        pwtf_metrics: data.pwtf_metrics,
+        pwtf_spectrum_bins: data.pwtf_spectrum_bins || 0,
+        pwtf_frames_analyzed: data.pwtf_frames_analyzed || 0,
+        d3_metrics: data.d3_metrics,
+        straighten_metrics: data.straighten_metrics,
+        heatmap_overlay_base64: data.heatmap_overlay_base64,
+        reasons: data.reasons || [],
+        url: targetUrl
+      });
+    } catch (err) {
+      setAnalyzing(false);
+      setVideoError(`Could not reach the RINSE backend at ${base}. Is the server running? (${(err as Error).message})`);
     }
 
-    // Local/offline mode has been removed from video analysis.
-    // Video analysis now requires Cloud mode with a running backend server.
-    // This ensures all videos are analyzed with the full spatio-temporal ensemble
-    // (PwTF-DVD, temporal coherence, spatial forensics) rather than incomplete
-    // offline heuristics that produce unreliable results.
-    setAnalyzing(false);
-    setVideoError(
-      'Video analysis requires Cloud mode. Please configure your RINSE backend API URL in Settings and ensure the server is running. '
-      + 'For social media links (Instagram, TikTok, YouTube), the server needs yt-dlp installed (pip install -U yt-dlp) to download and analyze the videos.'
-    );
   };
 
   const handleUploadFile = (e: ChangeEvent<HTMLInputElement>) => {
@@ -2127,16 +2114,13 @@ export default function Playground({ settings }: PlaygroundProps) {
                   CLOUD — full spatio-temporal ensemble (server required)
                 </strong>
               </span>
-              {!settings?.apiUrl && (
-                <span style={{ color: 'var(--warning)', fontWeight: '700' }}>No backend configured</span>
-              )}
             </div>
 
             <button 
               onClick={() => handleAnalyzeVideo()}
               className="btn btn-primary"
               style={{ width: '100%', padding: '9px' }}
-              disabled={analyzing || !videoUrl || !settings?.apiUrl}
+              disabled={analyzing || !videoUrl}
             >
               <Activity size={13} />
               <span>{analyzing ? 'Computing Temporal FFT & Optical Flow...' : 'Run Spatio-Temporal Video Analysis'}</span>

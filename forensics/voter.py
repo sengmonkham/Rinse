@@ -919,6 +919,36 @@ def fuse_ensemble_verdict(
 
     coverage_reasons: List[str] = []
 
+    # Photoreal-AI head escalation (image path). The learned layer's
+    # `photoreal` head is the only signal that separates modern photoreal AI
+    # (measured GroupKFold AUC 0.80 on Ai_generated_dataset + the hard
+    # "images it cant detect" exemplars vs real photos). Its layer score is
+    # capped at 79, and the generic escalation formula only lifts a sub-85
+    # layer to ~61-64 (UNCERTAIN), so without this rule a photoreal AI image
+    # reads "UNCERTAIN" instead of being flagged. When the head is confident
+    # (>= 0.85) lift the fused score into the SUSPICIOUS band. Capped at 79:
+    # photoreal-vs-real genuinely overlaps (measured ~4-5% real FPR at this
+    # operating point), so this is a review finding, never SYNTHETIC_AI.
+    photoreal_p = float(
+        ((extra_data or {}).get("learned_metrics") or {}).get("photoreal_probability") or 0.0
+    )
+    if (
+        not is_video
+        and photoreal_p >= 0.85
+        and not authenticity_override
+        and raw_score < 79
+    ):
+        _pr_strength = min(1.0, (photoreal_p - 0.85) / 0.15)
+        raw_score = min(_graded_floor(raw_score, 69.0, 79.0, _pr_strength), 79.0)
+        coverage_reasons.append(
+            f"Photoreal-AI classifier: the dataset-trained photoreal head reads "
+            f"{photoreal_p:.0%} AI on this image. This is the head calibrated on "
+            f"modern photoreal diffusion (the hard 'images it cant detect' "
+            f"exemplars), which earlier heads and CNNSpot miss. Photoreal-vs-real "
+            f"is an overlapping problem, so it is reported as SUSPICIOUS (review), "
+            f"not as a SYNTHETIC_AI claim."
+        )
+
     # Capture-origin escalation (native-resolution structural evidence). Runs
     # BEFORE the temporal coverage rules so a rendered clip is described by the
     # evidence that actually found it. Unlike every temporal path this is not a

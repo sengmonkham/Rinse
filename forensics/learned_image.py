@@ -13,6 +13,14 @@ adds a classifier trained on that corpus instead:
 * **photo head** - the cheap pixel statistics in forensics/image_features.py +
   linear head, trained on ``Ai_generated_dataset`` (AI) vs ``real_dataset``
   (real). Grouped AUC 0.890; 51.2% recall at a 1% FPR (66.4% at 5%).
+* **photoreal head** - CLIP ViT-B/32 embeddings + linear head, trained on
+  ``Ai_generated_dataset`` (incl. the ``photoreal/`` exemplars the user
+  supplied) vs ``real_dataset``. Grouped AUC ~0.80. This is the head that
+  separates modern photoreal diffusion (the hard "images it cant detect"
+  exemplars) that the render/photo heads and CNNSpot all miss. Because
+  photoreal-vs-real genuinely overlaps (measured ~5% held-out real FPR at its
+  operating point), its score is capped at 79 (SUSPICIOUS) - it flags an image
+  for review but never claims the synthetic tier on its own.
 
 Both heads are exported as scaler + coefficients by
 ``scripts/train_image_classifier.py`` - inference here is numpy only. The CLIP
@@ -195,9 +203,11 @@ def analyze_learned_image(img: Image.Image) -> Dict[str, Any]:
     heads = model.get("heads", {})
     probabilities: Dict[str, float] = {}
 
+    # CLIP is shared by the render and photoreal heads; embed once.
+    emb = clip_embedding(img)
+
     render_head = heads.get("render")
     if render_head:
-        emb = clip_embedding(img)
         if emb is not None and len(emb) == len(render_head.get("coef", [])):
             try:
                 probabilities["render"] = _linear_probability(render_head, emb)
@@ -213,6 +223,19 @@ def analyze_learned_image(img: Image.Image) -> Dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             print(f"Learned photo head failed: {exc}")
 
+    # Photoreal head: CLIP + linear, trained on modern photoreal AI (incl. the
+    # "images it cant detect" exemplars) vs real photos. It is the ONLY head
+    # that separates those hard photoreal exemplars, but photoreal-vs-real is a
+    # genuinely overlapping problem (measured GroupKFold AUC ~0.80, ~4% real FP
+    # at its operating point), so its score is capped at SUSPICIOUS (79) - it
+    # can flag a clip for review but never claim the synthetic tier on its own.
+    photoreal_head = heads.get("photoreal")
+    if photoreal_head and emb is not None and len(emb) == len(photoreal_head.get("coef", [])):
+        try:
+            probabilities["photoreal"] = _linear_probability(photoreal_head, emb)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Learned photoreal head failed: {exc}")
+
     if not probabilities:
         result["reasons"].append(
             "Dataset-trained classifier heads unavailable for this image; "
@@ -223,11 +246,15 @@ def analyze_learned_image(img: Image.Image) -> Dict[str, Any]:
     head_name = max(probabilities, key=probabilities.get)
     p = probabilities[head_name]
     score = int(round(probability_to_score(p)))
+    if head_name == "photoreal":
+        score = min(score, int(heads.get("photoreal", {}).get("score_cap", 79)))
     metrics = {
         "render_probability": round(float(probabilities["render"]), 4)
         if "render" in probabilities else None,
         "photo_probability": round(float(probabilities["photo"]), 4)
         if "photo" in probabilities else None,
+        "photoreal_probability": round(float(probabilities["photoreal"]), 4)
+        if "photoreal" in probabilities else None,
         "head": head_name,
         "probability": round(float(p), 4),
         "model_trained_at": model.get("trained_at"),
@@ -237,6 +264,7 @@ def analyze_learned_image(img: Image.Image) -> Dict[str, Any]:
     label = {
         "render": "AI-render / viral brainrot style",
         "photo": "photorealistic synthetic image",
+        "photoreal": "photorealistic AI-generated image (modern diffusion)",
     }.get(head_name, "AI-generated image")
 
     if score >= 62:

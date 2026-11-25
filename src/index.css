@@ -582,17 +582,6 @@ input:checked + .slider:before {
   gap: 10px;
 }
 
-.popup-logo-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  background: var(--primary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25);
-}
-
 .popup-title {
   font-family: 'Space Grotesk', sans-serif;
   font-size: 16px;
@@ -650,6 +639,57 @@ input:checked + .slider:before {
 .popup-toggle-status.off {
   color: var(--text-muted);
   background: rgba(15, 23, 42, 0.04);
+}
+
+/* Backend target selector */
+.popup-target {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 20px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.popup-target-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.popup-target-group {
+  display: flex;
+  gap: 4px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--bg-darker);
+  border: 1px solid var(--border-color);
+}
+
+.popup-target-btn {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.popup-target-btn.active {
+  background: var(--primary);
+  color: #ffffff;
+  box-shadow: 0 1px 4px rgba(37, 99, 235, 0.25);
+}
+
+.popup-target-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* Toggle rows */

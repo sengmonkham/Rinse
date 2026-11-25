@@ -2761,12 +2761,8 @@ const openDiagnosticDrawer = (item, type) => {
   header.className = "aegis-drawer-header";
   const title = document.createElement("div");
   title.className = "aegis-drawer-title";
-  const shield = document.createElement("span");
-  shield.style.color = item.score >= 60 ? "#EF4444" : "#F59E0B";
-  shield.textContent = "🛡️";
   const titleText = document.createElement("span");
   titleText.textContent = "RINSE Inspector";
-  title.appendChild(shield);
   title.appendChild(titleText);
   const closeBtn = document.createElement("button");
   closeBtn.className = "aegis-drawer-close";

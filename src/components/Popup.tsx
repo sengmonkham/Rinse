@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Shield, ExternalLink, Scan, RefreshCw, Server } from 'lucide-react';
+import { DEPLOYED_API_URL, LOCAL_API_URL } from '../backend';
 
 // RINSE never scans its own website — the landing page legitimately contains
 // self-referential demo copy ("AI 87%" badges, how-it-works bullets) that the
@@ -25,6 +26,7 @@ interface PopupSettings {
   showVibecodedAlert: boolean;
   sensitivity: number;
   apiMode: string;
+  apiTarget: string;
   apiUrl: string;
 }
 
@@ -46,9 +48,14 @@ interface BackendStatus {
 
 interface DevStatsData {
   backend: BackendStatus | null;
+  deployedBackend: BackendStatus | null;
+  localBackend: BackendStatus | null;
   extensionEnabled: boolean;
   apiMode: string;
+  apiTarget: string;
   apiUrl: string;
+  localUrl: string;
+  deployedUrl: string;
   sensitivity: number;
   stats: {
     totalScans: number;
@@ -75,8 +82,9 @@ const DEFAULT_SETTINGS: PopupSettings = {
   showInlineBadges: true,
   showVibecodedAlert: false,
   sensitivity: 50,
-  apiMode: 'local',
-  apiUrl: '',
+  apiMode: 'cloud',
+  apiTarget: 'deployed',
+  apiUrl: DEPLOYED_API_URL,
 };
 
 const formatRelativeTime = (ts: number): string => {
@@ -104,9 +112,14 @@ export default function Popup() {
   const [settings, setSettings] = useState<PopupSettings>(DEFAULT_SETTINGS);
   const [devStats, setDevStats] = useState<DevStatsData>({
     backend: null,
+    deployedBackend: null,
+    localBackend: null,
     extensionEnabled: true,
-    apiMode: 'local',
-    apiUrl: '',
+    apiMode: 'cloud',
+    apiTarget: 'deployed',
+    apiUrl: DEPLOYED_API_URL,
+    localUrl: LOCAL_API_URL,
+    deployedUrl: DEPLOYED_API_URL,
     sensitivity: 50,
     stats: {
       totalScans: 0,
@@ -139,8 +152,9 @@ export default function Popup() {
           showInlineBadges: result.settings.showInlineBadges ?? true,
           showVibecodedAlert: result.settings.showVibecodedAlert ?? false,
           sensitivity: result.settings.sensitivity ?? 50,
-          apiMode: result.settings.apiMode ?? 'local',
-          apiUrl: result.settings.apiUrl ?? '',
+          apiMode: result.settings.apiMode ?? 'cloud',
+          apiTarget: result.settings.apiTarget ?? 'deployed',
+          apiUrl: result.settings.apiUrl || DEPLOYED_API_URL,
         });
       }
     });
@@ -150,6 +164,21 @@ export default function Popup() {
       if (response?.status === 'success' && response.data) {
         setDevStats(response.data as DevStatsData);
       }
+    });
+
+    // Probe the active backend and the local dev server so both status lines
+    // are current when the popup opens (local status is shown either way).
+    chrome.runtime.sendMessage({ action: 'checkBackend' }, (response: MessageResponse) => {
+      if (response?.status === 'success' && response.data) {
+        setDevStats(prev => ({ ...prev, backend: response.data as BackendStatus }));
+      }
+      chrome.storage.local.get(['deployedBackendStatus', 'localBackendStatus'], (res: any) => {
+        setDevStats(prev => ({
+          ...prev,
+          deployedBackend: res.deployedBackendStatus ?? prev.deployedBackend,
+          localBackend: res.localBackendStatus ?? prev.localBackend,
+        }));
+      });
     });
 
     // Get current tab info
@@ -184,7 +213,7 @@ export default function Popup() {
   }, []);
 
   // Helper: save settings to storage and notify content script
-  const updateSetting = useCallback((key: keyof PopupSettings, value: boolean | number) => {
+  const updateSetting = useCallback((key: keyof PopupSettings, value: boolean | number | string) => {
     setSettings(prev => {
       const next = { ...prev, [key]: value };
       if (IS_CHROME_EXT) {
@@ -201,6 +230,34 @@ export default function Popup() {
         });
       }
       return next;
+    });
+  }, []);
+
+  // Switch where scan verdicts come from (deployed Space or local dev server)
+  const handleSelectTarget = useCallback((target: 'deployed' | 'local') => {
+    setSettings(prev => ({ ...prev, apiTarget: target }));
+    if (!IS_CHROME_EXT) return;
+    chrome.storage.local.get(['settings'], (result: any) => {
+      const updated = { ...(result.settings || {}), apiTarget: target };
+      chrome.storage.local.set({ settings: updated });
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs: any[]) => {
+        const tab = tabs[0];
+        if (tab?.id) {
+          chrome.tabs.sendMessage(tab.id, { action: 'updateSettings', settings: updated });
+        }
+      });
+      chrome.runtime.sendMessage({ action: 'checkBackend' }, (response: MessageResponse) => {
+        if (response?.status === 'success' && response.data) {
+          setDevStats(prev => ({ ...prev, backend: response.data as BackendStatus, apiTarget: target }));
+        }
+        chrome.storage.local.get(['deployedBackendStatus', 'localBackendStatus'], (res: any) => {
+          setDevStats(prev => ({
+            ...prev,
+            deployedBackend: res.deployedBackendStatus ?? prev.deployedBackend,
+            localBackend: res.localBackendStatus ?? prev.localBackend,
+          }));
+        });
+      });
     });
   }, []);
 
@@ -297,9 +354,6 @@ export default function Popup() {
       {/* Header */}
       <div className="popup-header">
         <div className="popup-logo">
-          <div className="popup-logo-icon">
-            <Shield size={16} color="#ffffff" />
-          </div>
           <div>
             <h1 className="popup-title">RINSE</h1>
             <p className="popup-subtitle">Remove Inauthentic Noise</p>
@@ -324,6 +378,29 @@ export default function Popup() {
           />
           <span className="popup-slider" />
         </label>
+      </div>
+
+      {/* Backend target — where scan verdicts come from */}
+      <div className="popup-target">
+        <span className="popup-target-label">Results from</span>
+        <div className="popup-target-group">
+          <button
+            type="button"
+            className={`popup-target-btn ${settings.apiTarget === 'deployed' ? 'active' : ''}`}
+            onClick={() => handleSelectTarget('deployed')}
+            disabled={isDisabled}
+          >
+            Deployed
+          </button>
+          <button
+            type="button"
+            className={`popup-target-btn ${settings.apiTarget === 'local' ? 'active' : ''}`}
+            onClick={() => handleSelectTarget('local')}
+            disabled={isDisabled}
+          >
+            Local
+          </button>
+        </div>
       </div>
 
       {/* Toggle List */}
@@ -447,43 +524,53 @@ export default function Popup() {
             </button>
           </div>
 
-          {/* Backend connection */}
-          <div className="popup-dev-row">
-            <span className="popup-dev-label">Backend</span>
+          {/* Deployed HF Space — always its own line */}
+          <div className="popup-dev-row" title={devStats.deployedUrl}>
+            <span className="popup-dev-label">HF backend</span>
             <span className="popup-dev-value">
-              <span className={`popup-dev-dot ${devStats.backend ? (devStats.backend.connected ? 'ok' : 'err') : 'idle'}`} />
-              {devStats.backend === null ? 'Unknown' : devStats.backend.connected ? 'Connected' : 'Not connected'}
+              <span className={`popup-dev-dot ${devStats.deployedBackend ? (devStats.deployedBackend.connected ? 'ok' : 'err') : 'idle'}`} />
+              {devStats.deployedBackend === null ? 'Unknown' : devStats.deployedBackend.connected ? 'Connected' : 'Not connected'}
             </span>
           </div>
-          {devStats.backend && (
+
+          {/* Local dev server — always its own line */}
+          <div className="popup-dev-row" title={devStats.localUrl}>
+            <span className="popup-dev-label">Local</span>
+            <span className="popup-dev-value">
+              <span className={`popup-dev-dot ${devStats.localBackend ? (devStats.localBackend.connected ? 'ok' : 'err') : 'idle'}`} />
+              {devStats.localBackend === null ? 'Unknown' : devStats.localBackend.connected ? 'Connected' : 'Not connected'}
+            </span>
+          </div>
+
+          {devStats.deployedBackend && (
             <>
               <div className="popup-dev-row">
                 <span className="popup-dev-label">Endpoint</span>
-                <span className="popup-dev-value popup-dev-url" title={devStats.backend.url}>
-                  {devStats.backend.url}
+                <span className="popup-dev-value popup-dev-url" title={devStats.deployedBackend.url}>
+                  {devStats.deployedBackend.url}
                 </span>
               </div>
-              {devStats.backend.connected && devStats.backend.server ? (
+              {devStats.deployedBackend.connected && devStats.deployedBackend.server ? (
                 <>
                   <div className="popup-dev-row">
                     <span className="popup-dev-label">Latency</span>
-                    <span className="popup-dev-value">{devStats.backend.latencyMs != null ? `${devStats.backend.latencyMs} ms` : '—'}</span>
+                    <span className="popup-dev-value">{devStats.deployedBackend.latencyMs != null ? `${devStats.deployedBackend.latencyMs} ms` : '—'}</span>
                   </div>
                   <div className="popup-dev-row">
                     <span className="popup-dev-label">Server</span>
                     <span className="popup-dev-value">
-                      v{devStats.backend.server.version ?? '?'} · {devStats.backend.server.mode ?? 'heuristic'} · {formatUptime(devStats.backend.server.uptime_seconds) || '—'}
+                      v{devStats.deployedBackend.server.version ?? '?'} · {devStats.deployedBackend.server.mode ?? 'heuristic'} · {formatUptime(devStats.deployedBackend.server.uptime_seconds) || '—'}
                     </span>
                   </div>
                   <div className="popup-dev-row">
                     <span className="popup-dev-label">DetectZoo</span>
-                    <span className="popup-dev-value">{devStats.backend.server.detectzoo_loaded ? 'loaded' : 'fallback'}</span>
+                    <span className="popup-dev-value">{devStats.deployedBackend.server.detectzoo_loaded ? 'loaded' : 'fallback'}</span>
                   </div>
                 </>
               ) : (
                 <div className="popup-dev-row">
                   <span className="popup-dev-label">Error</span>
-                  <span className="popup-dev-value popup-dev-err">{devStats.backend.error ?? 'failed'}</span>
+                  <span className="popup-dev-value popup-dev-err">{devStats.deployedBackend.error ?? 'failed'}</span>
                 </div>
               )}
             </>

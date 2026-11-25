@@ -6,6 +6,7 @@ import Playground from './components/Playground';
 import PageHistory from './components/PageHistory';
 import Settings from './components/Settings';
 import Popup from './components/Popup';
+import { DEPLOYED_API_URL } from './backend';
 
 // Detect popup mode: Chrome extension popup appends #popup to the URL
 const IS_POPUP = typeof window !== 'undefined' && window.location.hash === '#popup';
@@ -28,6 +29,7 @@ export interface AppSettings {
   autoImageOverlays: boolean;
   showVibecodedAlert: boolean;
   apiMode: string;
+  apiTarget: string;
   apiUrl: string;
   apiKey: string;
   webAppUrl?: string;
@@ -42,11 +44,29 @@ const DEFAULT_SETTINGS: AppSettings = {
   showInlineBadges: true,
   autoImageOverlays: false,
   showVibecodedAlert: false,
-  apiMode: "local",
-  apiUrl: "",
+  apiMode: "cloud",
+  apiTarget: "deployed",
+  apiUrl: DEPLOYED_API_URL,
   apiKey: "",
   webAppUrl: "http://localhost:3000",
   authToken: ""
+};
+
+// Settings saved before apiTarget existed defaulted to offline heuristics with an
+// empty API URL, which silently skipped every backend call in the sandbox.
+const normalizeSettings = (saved: Partial<AppSettings>): AppSettings => {
+  const merged: AppSettings = { ...DEFAULT_SETTINGS, ...saved };
+  if (!saved.apiTarget) {
+    const savedUrl = (saved.apiUrl || "").trim();
+    merged.apiMode = "cloud";
+    merged.apiTarget = "deployed";
+    merged.apiUrl = !savedUrl || /localhost|127\.0\.0\.1/.test(savedUrl) ? DEPLOYED_API_URL : savedUrl;
+  }
+  // Never leave a cloud target without a URL — the deployed Space is the default.
+  if (merged.apiTarget !== "local" && !(merged.apiUrl || "").trim()) {
+    merged.apiUrl = DEPLOYED_API_URL;
+  }
+  return merged;
 };
 
 // Computed once at module load — never changes during the session.
@@ -71,7 +91,7 @@ export default function App() {
     const saved = localStorage.getItem("rinse_settings");
     if (saved) {
       try {
-        return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+        return normalizeSettings(JSON.parse(saved) as Partial<AppSettings>);
       } catch {
         // Ignore corrupt saved settings
       }
@@ -110,7 +130,7 @@ export default function App() {
     if (IS_CHROME_EXT) {
       // Load settings, subscription and history from extension local storage
       chrome.storage.local.get(["settings", "scanHistory", "subscriptionState"], (result: Record<string, unknown>) => {
-        if (result.settings) setSettings(result.settings as AppSettings);
+        if (result.settings) setSettings(normalizeSettings(result.settings as Partial<AppSettings>));
         if (result.scanHistory) setScanHistory(result.scanHistory as ScanHistoryEntry[]);
         if (result.subscriptionState) setSubscription(result.subscriptionState as SubscriptionState);
       });

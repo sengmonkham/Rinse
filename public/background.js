@@ -1,5 +1,54 @@
 // RINSE - Background Service Worker
 
+// Backend targets. "deployed" is the hosted Hugging Face Space; "local" is the
+// developer server on this machine. Settings/popup store the user's choice.
+const DEPLOYED_API_URL = "https://senkmonkham-rinse-detector.hf.space";
+const LOCAL_API_URL = "http://localhost:5001";
+
+// --- Deployed-backend keep-alive -------------------------------------------
+// Hugging Face Spaces sleep after a few minutes without traffic. A periodic
+// /health ping on a Chrome alarm keeps the Space warm even when no tab is being
+// scanned and the popup is closed (alarms wake the service worker).
+const KEEPALIVE_ALARM = "rinseBackendKeepAlive";
+const KEEPALIVE_PERIOD_MINUTES = 3;
+
+function deployedHealthUrl(settings) {
+  let base = String((settings && settings.apiUrl) || "").trim();
+  base = base.replace(/\/predict(\/.*)?$/, "").replace(/\/+$/, "");
+  // A loopback or empty URL is not something that can sleep — ping the Space.
+  if (!base || base === LOCAL_API_URL || /localhost|127\.0\.0\.1/.test(base)) {
+    base = DEPLOYED_API_URL;
+  }
+  return `${base}/health`;
+}
+
+function ensureKeepAliveAlarm() {
+  chrome.alarms.get(KEEPALIVE_ALARM, (alarm) => {
+    if (!alarm) {
+      chrome.alarms.create(KEEPALIVE_ALARM, {
+        delayInMinutes: 1,
+        periodInMinutes: KEEPALIVE_PERIOD_MINUTES
+      });
+    }
+  });
+}
+
+function pingDeployedBackend() {
+  chrome.storage.local.get(["settings"], (result) => {
+    const url = deployedHealthUrl(result.settings);
+    fetch(url, { method: "GET", cache: "no-store" })
+      .then((res) => console.log(`RINSE keep-alive: ${url} -> HTTP ${res.status}`))
+      .catch((err) => console.warn(`RINSE keep-alive failed: ${url} (${err.message})`));
+  });
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === KEEPALIVE_ALARM) pingDeployedBackend();
+});
+chrome.runtime.onInstalled.addListener(ensureKeepAliveAlarm);
+chrome.runtime.onStartup.addListener(ensureKeepAliveAlarm);
+ensureKeepAliveAlarm();
+
 // Initialize state and listeners
 chrome.runtime.onInstalled.addListener(() => {
   console.log("RINSE (Remove Inauthentic Noise) extension installed.");
@@ -16,8 +65,9 @@ chrome.runtime.onInstalled.addListener(() => {
           showInlineBadges: true,
           autoImageOverlays: false,
           showVibecodedAlert: false,
-          apiMode: "local", // "local" or "cloud"
-          apiUrl: "",
+          apiMode: "cloud", // "local" (offline heuristics) or "cloud" (backend)
+          apiTarget: "deployed", // "deployed" (hosted Space) or "local" (localhost:5001)
+          apiUrl: DEPLOYED_API_URL,
           apiKey: "",
           webAppUrl: "http://localhost:3000",
           authToken: ""
@@ -98,60 +148,114 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   });
 });
 
-// Resolve the backend base URL from settings. Cloud mode stores a full
-// endpoint like "https://api.rinse.app/v1" or "http://localhost:5001/predict";
-// the health probe always lives at {base}/health.
+// Resolve the backend base URL from settings. The user picks where verdicts
+// come from: the deployed Hugging Face Space ("deployed", the default) or the
+// dev server on this machine ("local"). settings.apiUrl holds the deployed
+// Space URL so it stays editable; the local URL is fixed. The health probe
+// always lives at {base}/health.
 function resolveBackendBaseUrl(settings) {
-  let base = (settings.apiUrl || "http://localhost:5001").trim();
+  settings = settings || {};
+  // Legacy settings saved before apiTarget existed: honour a loopback apiUrl.
+  const target =
+    settings.apiTarget === "local" ||
+    (!settings.apiTarget && /localhost|127\.0\.0\.1/.test(settings.apiUrl || ""))
+      ? "local"
+      : "deployed";
+  const fallback = target === "local" ? LOCAL_API_URL : DEPLOYED_API_URL;
+  let base = (target === "local" ? LOCAL_API_URL : (settings.apiUrl || DEPLOYED_API_URL)).trim();
   base = base.replace(/\/predict(\/.*)?$/, ""); // strip /predict or /predict/... suffixes
   base = base.replace(/\/+$/, "");
-  return base || "http://localhost:5001";
+  return base || fallback;
 }
 
-// Ping the backend /health endpoint, measure latency, and cache the result
-// in chrome.storage.local so the popup can render it instantly.
+// Ping one backend's /health endpoint, measure latency, and return the status
+// object. Never throws — an unreachable host is a valid "not connected" answer.
+function probeBackend(base, callback) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  const startedAt = performance.now();
+
+  fetch(`${base}/health`, { method: "GET", signal: controller.signal })
+    .then(async (res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    })
+    .then((data) => {
+      clearTimeout(timeout);
+      callback({
+        connected: true,
+        url: base,
+        latencyMs: Math.round(performance.now() - startedAt),
+        server: data,
+        error: null,
+        checkedAt: Date.now()
+      });
+    })
+    .catch((err) => {
+      clearTimeout(timeout);
+      callback({
+        connected: false,
+        url: base,
+        latencyMs: null,
+        server: null,
+        error: err.name === "AbortError" ? "timeout" : err.message,
+        checkedAt: Date.now()
+      });
+    });
+}
+
+// Probe the active backend (stored as backendStatus), plus the deployed HF Space
+// (deployedBackendStatus) and the local dev server (localBackendStatus), so the
+// popup can show "HF backend: Connected" and "Local: Not connected" side by
+// side regardless of which target is selected.
 function checkBackendHealth(sendResponse) {
   chrome.storage.local.get(["settings"], (result) => {
     const settings = result.settings || {};
-    const base = resolveBackendBaseUrl(settings);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
-    const startedAt = performance.now();
+    const activeBase = resolveBackendBaseUrl(settings);
 
-    fetch(`${base}/health`, { method: "GET", signal: controller.signal })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((data) => {
-        clearTimeout(timeout);
-        const status = {
-          connected: true,
-          url: base,
-          latencyMs: Math.round(performance.now() - startedAt),
-          server: data,
-          error: null,
-          checkedAt: Date.now()
-        };
-        chrome.storage.local.set({ backendStatus: status }, () => {
-          console.log("RINSE backend health:", status);
-          if (sendResponse) sendResponse({ status: "success", data: status });
-        });
-      })
-      .catch((err) => {
-        clearTimeout(timeout);
-        const status = {
-          connected: false,
-          url: base,
-          latencyMs: null,
-          server: null,
-          error: err.name === "AbortError" ? "timeout" : err.message,
-          checkedAt: Date.now()
-        };
-        chrome.storage.local.set({ backendStatus: status }, () => {
-          if (sendResponse) sendResponse({ status: "success", data: status });
-        });
+    // The deployed Space URL stays editable, so keep it handy even when the
+    // local server is the active target.
+    const deployedBase = (() => {
+      if (activeBase !== LOCAL_API_URL) return activeBase;
+      let base = (settings.apiUrl || DEPLOYED_API_URL).trim();
+      base = base.replace(/\/predict(\/.*)?$/, "").replace(/\/+$/, "");
+      return !base || base === LOCAL_API_URL ? DEPLOYED_API_URL : base;
+    })();
+
+    const statuses = {};
+    const probes = [];
+
+    // Active target (drives scan routing).
+    probes.push([activeBase, (status) => { statuses.backendStatus = status; }]);
+
+    // Deployed HF Space — always its own line in the popup.
+    if (deployedBase !== activeBase) {
+      probes.push([deployedBase, (status) => { statuses.deployedBackendStatus = status; }]);
+    }
+
+    // Local dev server — always its own line in the popup.
+    if (activeBase !== LOCAL_API_URL) {
+      probes.push([LOCAL_API_URL, (status) => { statuses.localBackendStatus = status; }]);
+    }
+
+    let remaining = probes.length;
+    const done = () => {
+      if (--remaining > 0) return;
+      // Clone the active target's result onto its own-line field.
+      if (deployedBase === activeBase) statuses.deployedBackendStatus = statuses.backendStatus;
+      if (activeBase === LOCAL_API_URL) statuses.localBackendStatus = statuses.backendStatus;
+      chrome.storage.local.set(statuses, () => {
+        console.log("RINSE backend health:", statuses);
+        if (sendResponse) sendResponse({ status: "success", data: statuses.backendStatus });
       });
+    };
+
+    probes.forEach(([base, assign]) => {
+      probeBackend(base, (status) => {
+        assign(status);
+        done();
+      });
+    });
   });
 }
 
@@ -363,16 +467,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   
   else if (request.action === "getDevStats") {
-    chrome.storage.local.get(["devStats", "scanHistory", "settings", "extensionEnabled", "backendStatus"], (result) => {
+    chrome.storage.local.get(["devStats", "scanHistory", "settings", "extensionEnabled", "backendStatus", "deployedBackendStatus", "localBackendStatus"], (result) => {
       const devStats = result.devStats || {};
       const settings = result.settings || {};
+      const activeBase = resolveBackendBaseUrl(settings);
       sendResponse({
         status: "success",
         data: {
           backend: result.backendStatus || null,
+          deployedBackend: result.deployedBackendStatus || null,
+          localBackend: result.localBackendStatus || null,
           extensionEnabled: result.extensionEnabled !== false,
-          apiMode: settings.apiMode || "local",
-          apiUrl: settings.apiUrl || "",
+          apiMode: settings.apiMode || "cloud",
+          apiTarget: activeBase === LOCAL_API_URL ? "local" : "deployed",
+          apiUrl: activeBase,
+          localUrl: LOCAL_API_URL,
+          deployedUrl: DEPLOYED_API_URL,
           sensitivity: settings.sensitivity ?? 50,
           stats: {
             totalScans: devStats.totalScans || 0,
@@ -568,8 +678,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ status: "success", found: false });
         return;
       }
-      const raw = (settings.apiUrl || "http://localhost:5001").trim();
-      const base = raw.replace(/\/predict(\/.*)?$/, "").replace(/\/+$/, "");
+      const base = resolveBackendBaseUrl(settings);
       const apiEndpoint = `${base}/predict/video/deep`;
       const payload = { frames_base64: frames };
       if (typeof request.frameIntervalSeconds === "number" &&
@@ -627,8 +736,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ status: "success", found: false });
         return;
       }
-      const raw = (settings.apiUrl || "http://localhost:5001").trim();
-      const base = raw.replace(/\/predict(\/.*)?$/, "").replace(/\/+$/, "");
+      const base = resolveBackendBaseUrl(settings);
       // Forward page context for AI-provenance metadata detection (caption,
       // page title, URL) - matches the image scan context behavior.
       const ctx = request.context && typeof request.context === "object" ? request.context : {};
