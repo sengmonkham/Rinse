@@ -57,6 +57,9 @@ deploy/azure/.azure-state.env
 # MNW benchmark dataset (cloned AI media repo, Git LFS objects)
 MNW/
 
+# Design notes and internal plans (local only, not published)
+docs/
+
 # Image assets (datasets, fixtures, logos, icons) - not stored in git
 *.png
 *.jpg

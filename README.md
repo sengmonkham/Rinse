@@ -1,14 +1,10 @@
-# RINSE — detection backend
+# RINSE
 
-**The detector below, run on two images — one real photograph, one synthetic (both in this repo):**
-
-<img src="animals_1.jpg" width="340" alt="Real photograph: polar bear standing in snow"> <img src="image.png" width="340" alt="Synthetic image: temple courtyard with stone path">
+<img src="animals_1.jpg" height="280" alt="Real photograph: polar bear standing in snow"> <img src="image.png" height="280" alt="Synthetic image: temple courtyard with stone path">
 
 Real photograph → **11 · `AUTHENTIC_HUMAN`** (HIGH) &nbsp;|&nbsp; Synthetic image → **72 · `SUSPICIOUS`** (MEDIUM). Full verdict breakdown: [worked example](#worked-example-one-real-photograph-one-synthetic-image).
 
-RINSE (**R**emove **I**nauthentic **N**oise) is a Flask API server that decides whether text, images and video were produced by a human or by a generative model. This README documents the **backend only**: the endpoints, the forensic layers, the trained models, how each score is fused, where the evidence for the thresholds came from, and what the detector honestly cannot do.
-
-A browser extension and dashboard exist in this repository as an optional client, but nothing below depends on them — every capability here is reachable with `curl`.
+RINSE (**R**emove **I**nauthentic **N**oise) is a Flask API server that decides whether text, images and video were produced by a human or by a generative model. It covers the endpoints, the forensic layers, the trained models, how each score is fused, where the evidence for the thresholds came from, and what the detector honestly cannot do.
 
 ## Quick start
 
@@ -290,7 +286,7 @@ The sweep costs extra temporal work per scan (~+15–25 s on a 720×1280 15 s re
 
 ### Audio track: a separate axis, reported and never scored
 
-Video scans also decode and measure the clip's **audio track** (`forensics/audio_track.py`, phase A0 of [`docs/audio-and-lip-sync-plan.md`](docs/audio-and-lip-sync-plan.md)). It decodes mono float32 at 48 kHz with ffmpeg — from the **same bytes the frames came from**, so a link scan never downloads the clip twice — and reports the result in the verdict as an `audio` block plus plain-language lines in `reasons`.
+Video scans also decode and measure the clip's **audio track** (`forensics/audio_track.py`, phase A0 of the audio/lip-sync design plan). It decodes mono float32 at 48 kHz with ffmpeg — from the **same bytes the frames came from**, so a link scan never downloads the clip twice — and reports the result in the verdict as an `audio` block plus plain-language lines in `reasons`.
 
 **It never votes.** A synthetic voice over real footage is an *audio-AI* finding, not a deepfake video, so audio is a separate axis: `audio.score` is always `null`, it never appears in `breakdown`/`layers_active`, and no audio condition can move the video tier. It abstains with a reason when there is nothing to decode (client-extracted frames carry no container audio; a video-only download or a silent clip has no stream).
 
@@ -412,7 +408,7 @@ StoryScope's taxonomy, extraction prompts and dataset are by Jenna Russell, Rish
 
 ## Scan log: every scan in SQLite
 
-The [scan cache](docs/brainrot-characters-and-scan-cache-plan.md) answers "have I seen this before?". The scan log answers the other question: *what has the detector been asked to judge, and what did it say?* Every text, image and video scan the server serves — cache hit or miss, success or detector failure — is recorded in SQLite by [`forensics/scan_log.py`](forensics/scan_log.py).
+The scan cache answers "have I seen this before?". The scan log answers the other question: *what has the detector been asked to judge, and what did it say?* Every text, image and video scan the server serves — cache hit or miss, success or detector failure — is recorded in SQLite by [`forensics/scan_log.py`](forensics/scan_log.py).
 
 **Storage.** Stdlib `sqlite3`, one file: `cache/scan_log.db` (override the directory with `SCAN_LOG_DIR`). WAL journal mode, one short-lived connection per operation, no new dependency and no extra service. It sits next to `cache/scan_cache.db` and follows the same rules: the write path is best-effort and a logging failure can never turn a good scan into an error response.
 
