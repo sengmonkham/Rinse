@@ -73,3 +73,8 @@ MNW/
 *.tiff
 *.avif
 *.heic
+
+# Exception: the two sample images the README displays (tracked on purpose so
+# GitHub can render them)
+!/animals_1.jpg
+!/image.png
