@@ -18,8 +18,8 @@ reported score reflects the current code rather than a stored verdict.
 Assets come from three places:
 
 * the repo corpus that already exists - `tests/calibration_corpus/{ai,real}`
-  (images), `test videos/*.mp4` (videos), `demo-samples/texts/*.txt` and the
-  StoryScope evasion samples (text);
+  (images), `test videos/*.mp4` (videos), and the StoryScope evasion samples
+  (text);
 * the Instagram links already registered in `tests/detector_assets.json`;
 * the links registered in `tests/media_test_assets.json`.
 

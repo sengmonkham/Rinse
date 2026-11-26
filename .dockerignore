@@ -31,8 +31,6 @@ cache
 .git
 .gitignore
 docs
-demo-samples
-canvas-demo
 tests
 scripts
 CRASH_COURSE.md

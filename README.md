@@ -382,7 +382,7 @@ StoryScope's taxonomy, extraction prompts and dataset are by Jenna Russell, Rish
 
 ### DNA-DetectLLM
 
-`POST /predict/text/dna` runs the zero-shot DNA-DetectLLM detector (NeurIPS 2025 Spotlight): it measures how closely a text matches the reference model's ideal "mutation–repair" sequence. It is independent of StoryScope (different evidence, different failure modes) and is the more useful of the two on short non-narrative text — on the repo's `demo-samples/texts/human-written.txt`, StoryScope's heuristic reads ~79 (AI) while DNA reads ~23 (human), exactly the short-post case the heuristic caveats warn about.
+`POST /predict/text/dna` runs the zero-shot DNA-DetectLLM detector (NeurIPS 2025 Spotlight): it measures how closely a text matches the reference model's ideal "mutation–repair" sequence. It is independent of StoryScope (different evidence, different failure modes) and is the more useful of the two on short non-narrative text, exactly the short-post case the heuristic caveats warn about.
 
 ## Fusion, confidence and tiers
 
@@ -503,7 +503,7 @@ Four runnable files exercise the real detector code over the repo's own corpus a
 
 Each runs **in-process by default** — it imports the Flask app and drives it through its test client, so no server process is needed — or against a running instance with `--live http://localhost:5001` (and `--key` / `$RINSE_API_KEY` for a keyed server). Useful flags: `--ids <id,id>` for a subset, `--audit` (video: print the per-window temporal evidence), `--skip-instagram` (local clips only), `--remote-images`, and `--use-cache` (the default sends `no_cache=true`, so every verdict is freshly computed).
 
-Corpus: `demo-samples/texts/` + the StoryScope evasion samples + the humanizer outputs (text), `tests/calibration_corpus/{ai,real}/` (images), and `test videos/` plus the Instagram posts registered in `tests/detector_assets.json` and `tests/media_test_assets.json` (videos). Each run prints a per-asset score line and a `SCORES` recap, and merges the raw evidence into `tests/media_test_results.json`. The exit status is 0 only when no labeled asset FAILs and nothing errored; assets that are deliberately unasserted or unlabeled are reported **score-only**.
+Corpus: the StoryScope evasion samples (text), `tests/calibration_corpus/{ai,real}/` (images), and `test videos/` plus the Instagram posts registered in `tests/detector_assets.json` and `tests/media_test_assets.json` (videos). Each run prints a per-asset score line and a `SCORES` recap, and merges the raw evidence into `tests/media_test_results.json`. The exit status is 0 only when no labeled asset FAILs and nothing errored; assets that are deliberately unasserted or unlabeled are reported **score-only**.
 
 Measurement harnesses for changing a threshold:
 
@@ -519,7 +519,6 @@ Measurement harnesses for changing a threshold:
 
 Current known reds, kept visible on purpose:
 
-- `demo-samples/texts/human-written.txt` reads ~79 (AI) under StoryScope's offline heuristic while DNA-DetectLLM reads ~23 (human) — a short, non-narrative post, i.e. the input the heuristic caveats above warn about.
 - **No video reds as of 2026-10-22** — the full video suite is 59/59 with the default settings and the cache bypassed. The five reels that used to read `40 INCONCLUSIVE` now read `69 SUSPICIOUS` on the repeated total-collapse / residual-whiteness rules, and both confirmed-authentic reels stay `AUTHENTIC_HUMAN` (24 and 12).
 
 ## Honest limits

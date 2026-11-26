@@ -12,21 +12,8 @@ Both return a 0-100 AI probability (>= 50 = AI-generated), so the PASS/FAIL
 column is driven by the primary narrative detector (StoryScope) and the DNA
 score is reported alongside it.
 
-One measured disagreement is expected and left visible: the shipped
-``demo-samples/texts/human-written.txt`` reads ~79 (AI) under StoryScope's
-offline heuristic engine while DNA-DetectLLM reads ~23 (human). It is a single
-short, non-narrative post - exactly the input the README's heuristic-mode
-caveats warn about - so it stays an asserted human negative (and therefore a
-red line in the run) rather than being relabelled away.
-
 Corpus (all in-repo, no network):
 
-* ``demo-samples/texts/*.txt``            - labeled AI / human samples
-* ``humanized_text.txt`` + ``humanized_v2/v3.txt``
-                                          - AI text run through the repo's
-                                            humanizer; reported score-only,
-                                            because these are adversarial
-                                            by construction
 * ``storyscope/evasion_samples.py``       - texts written by hand specifically
                                             to evade these detectors (expected
                                             human)
@@ -45,43 +32,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import media_test_common as h
 
-TEXT_DIR = os.path.join(h.ROOT, "demo-samples", "texts")
-
-# demo-samples/texts file -> expected label.
-CORPUS_LABELS = {
-    "ai-emoji-slop.txt": "ai",
-    "ai-personal-narrative.txt": "ai",
-    "corporate-marketing.txt": "ai",
-    "linkedin-broetry.txt": "ai",
-    "human-written.txt": "human",
-}
-
-# Root-level humanizer outputs: AI text rewritten to look human. No expected
-# label - the point is to see how far the humanizer moves the score.
-HUMANIZED_FILES = ("humanized_text.txt", "humanized_v2.txt", "humanized_v3.txt")
-
-
 def collect_assets() -> list:
     assets = []
-    for fname, label in sorted(CORPUS_LABELS.items()):
-        path = os.path.join(TEXT_DIR, fname)
-        if os.path.exists(path):
-            assets.append({
-                "id": f"text-{fname[:-4]}",
-                "label": label,
-                "path": path,
-                "source": "demo-samples/texts",
-            })
-
-    for fname in HUMANIZED_FILES:
-        path = os.path.join(h.ROOT, fname)
-        if os.path.exists(path):
-            assets.append({
-                "id": f"text-{fname[:-4]}",
-                "label": "humanized",
-                "path": path,
-                "source": "repo root (humanizer output)",
-            })
 
     try:
         from storyscope import evasion_samples  # noqa: PLC0415

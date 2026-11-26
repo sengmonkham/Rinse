@@ -508,7 +508,7 @@ const injectStyles = () => {
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Video URL Detection (mirrors the backend/canvas-demo detectAIVideo logic)
+// Video URL Detection (mirrors the backend detectAIVideo logic)
 // ──────────────────────────────────────────────────────────────────────────────
 
 /** Parse video URL and extract platform/source info */

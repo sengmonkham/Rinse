@@ -1,9 +1,0 @@
-Back in 2021, I was ready to choose Computer Science as my major because I really loved coding and building apps. Then AI started blowing up, and everyone kept saying it was going to replace programmers. I got spooked and decided programming was a dead end. So I bailed on the thing I loved most.
-
-But here's the thing. I couldn't stay away. I started messing around with web dev tutorials, contributed to some open source projects on GitHub, and somehow landed an internship at a startup in Singapore. The passion was always there, just buried under all that fear.
-
-That whole mess flipped my entire career trajectory. I don't want anyone else going through that same spiral, getting fooled by synthetic content until we can't tell what's real anymore. I genuinely care about making sure AI doesn't become something that harms people or chips away at the trust we have in what we see and read online. That matters to me more than anything else right now.
-
-This led me to realize that the most important thing is to build tools that help people navigate this new world. Because of this, I decided to create something that would make a real difference. I do not want anyone else to feel that kind of doubt or be fooled by fake content that makes us lose trust in what we see and read.
-
-The lesson was clear: technology should serve humanity, not the other way around. And that's exactly what I'm committed to building. More than anything else, I want to make sure that every person has the tools they need to verify what's real and what's not.
