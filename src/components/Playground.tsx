@@ -4,6 +4,7 @@ import {
   Sparkles, 
   FileText, 
   Image as ImageIcon, 
+  Mic,
   Send, 
   Trash2, 
   ShieldAlert, 
@@ -159,7 +160,9 @@ interface ImageAnalysisResults {
   };
   // Audio track (video only; docs/audio-and-lip-sync-plan.md phase A0).
   // Reported on its own axis and NEVER scored against the video tier, so
-  // `score` is always null - it is evidence readout, not a vote.
+  // `score` is always null - it is evidence readout, not a vote. The nested
+  // `voice` block is the scored voice sibling (forensics/voice.py); it is
+  // still a separate axis, never part of the video tier.
   audio?: {
     score?: number | null;
     active?: boolean;
@@ -188,7 +191,31 @@ interface ImageAnalysisResults {
       frames_analyzed?: number;
     };
     reasons?: string[];
+    voice?: VoiceAnalysisResults;
   };
+}
+
+interface VoiceSignal {
+  id: string;
+  label: string;
+  value: number | null;
+  contribution: number;
+  detail: string;
+}
+
+interface VoiceAnalysisResults {
+  score: number | null;
+  label?: string;
+  tier?: string;
+  confidence?: 'HIGH' | 'MEDIUM' | 'LOW';
+  active?: boolean;
+  kind?: 'speech' | 'nonspeech' | 'silence' | 'unavailable';
+  has_speech?: boolean | null;
+  duration_s?: number | null;
+  signals?: VoiceSignal[];
+  metrics?: Record<string, number | null>;
+  reasons?: string[];
+  error?: string;
 }
 
 interface StoryScopeDimension {
@@ -230,7 +257,7 @@ interface PlaygroundProps {
 }
 
 export default function Playground({ settings }: PlaygroundProps) {
-  const [sandboxType, setSandboxType] = useState<'text' | 'image' | 'video'>('text');
+  const [sandboxType, setSandboxType] = useState<'text' | 'image' | 'video' | 'voice'>('text');
   
   // Text analysis states
   const [textVal, setTextVal] = useState('');
@@ -258,9 +285,16 @@ export default function Playground({ settings }: PlaygroundProps) {
   const [videoResults, setVideoResults] = useState<ImageAnalysisResults | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
 
+  // Voice analysis states
+  const [voiceUrl, setVoiceUrl] = useState('');
+  const [voiceFile, setVoiceFile] = useState<File | null>(null);
+  const [voiceResults, setVoiceResults] = useState<VoiceAnalysisResults | null>(null);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+
   const [analyzing, setAnalyzing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoFileInputRef = useRef<HTMLInputElement>(null);
+  const voiceFileInputRef = useRef<HTMLInputElement>(null);
 
   // Simple heuristic text logic matching content.js but adding verbose playground logs
   const handleAnalyzeText = (overrideText?: string) => {
@@ -1584,6 +1618,7 @@ export default function Playground({ settings }: PlaygroundProps) {
           pwtf_spectrum_bins: data.pwtf_spectrum_bins || 0,
           pwtf_frames_analyzed: data.pwtf_frames_analyzed || 0,
           heatmap_overlay_base64: data.heatmap_overlay_base64,
+          audio: data.audio,
           reasons: [
             ...(data.reasons || []),
             'Note: Temporal frequency analysis detected artifacts, but the coherence floor (p05=' + 
@@ -1609,12 +1644,13 @@ export default function Playground({ settings }: PlaygroundProps) {
         pwtf_metrics: data.pwtf_metrics,
         pwtf_spectrum_bins: data.pwtf_spectrum_bins || 0,
         pwtf_frames_analyzed: data.pwtf_frames_analyzed || 0,
-        d3_metrics: data.d3_metrics,
-        straighten_metrics: data.straighten_metrics,
-        heatmap_overlay_base64: data.heatmap_overlay_base64,
-        reasons: data.reasons || [],
-        url: targetUrl
-      });
+                  d3_metrics: data.d3_metrics,
+          straighten_metrics: data.straighten_metrics,
+          heatmap_overlay_base64: data.heatmap_overlay_base64,
+          audio: data.audio,
+          reasons: data.reasons || [],
+          url: targetUrl
+        });
     } catch (err) {
       setAnalyzing(false);
       setVideoError(`Could not reach the RINSE backend at ${base}. Is the server running? (${(err as Error).message})`);
@@ -1648,6 +1684,78 @@ export default function Playground({ settings }: PlaygroundProps) {
     handleAnalyzeVideo(url, file);
   };
 
+  // Voice analysis logic. Sends the audio bytes (or a direct media link) to
+  // /predict/audio/deep. A video file/link is valid input: the server decodes
+  // its audio track, so you can hear-and-judge the voice inside a video.
+  const handleAnalyzeVoice = async (overrideUrl?: string, file?: File | null) => {
+    const targetUrl = overrideUrl || voiceUrl;
+    if (!targetUrl) return;
+    setAnalyzing(true);
+    setVoiceResults(null);
+    setVoiceError(null);
+
+    const activeSettings = settings || {
+      enableTextScan: true, enableImageScan: true, enableVideoScan: true,
+      sensitivity: 50, showInlineBadges: true, autoImageOverlays: false,
+      showVibecodedAlert: false, apiMode: "local", apiUrl: "", apiKey: ""
+    };
+    const base = resolveApiBase(activeSettings);
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(activeSettings.apiKey ? { 'Authorization': `Bearer ${activeSettings.apiKey}` } : {})
+    };
+
+    let body: Record<string, unknown>;
+    if (file) {
+      if (file.size > 60 * 1024 * 1024) {
+        setAnalyzing(false);
+        setVoiceError('This file is over 60MB. Upload a shorter recording (or a clip under 60MB).');
+        return;
+      }
+      const b64 = await fileToBase64(file).catch(() => '');
+      if (!b64) {
+        setAnalyzing(false);
+        setVoiceError('Could not read this file. Try a WAV, MP3, M4A, OGG or video file.');
+        return;
+      }
+      body = { audio_base64: b64 };
+    } else if (/^https?:/i.test(targetUrl)) {
+      body = { audio_url: targetUrl };
+    } else {
+      setAnalyzing(false);
+      setVoiceError('Paste an audio or video URL, or upload a file.');
+      return;
+    }
+
+    try {
+      const res = await fetch(`${base}/predict/audio/deep`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAnalyzing(false);
+        setVoiceError(data.error || `Server returned HTTP ${res.status}.`);
+        return;
+      }
+      setAnalyzing(false);
+      setVoiceResults(data as VoiceAnalysisResults);
+    } catch (err) {
+      setAnalyzing(false);
+      setVoiceError(`Could not reach the RINSE backend at ${base}. Is the server running? (${(err as Error).message})`);
+    }
+  };
+
+  const handleUploadVoiceFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setVoiceFile(file);
+    setVoiceUrl(url);
+    handleAnalyzeVoice(url, file);
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', flex: '1', minHeight: '0' }}>
       
@@ -1676,6 +1784,14 @@ export default function Playground({ settings }: PlaygroundProps) {
         >
           <Video size={13} />
           <span>Video Temporal</span>
+        </button>
+        <button
+          onClick={() => { setSandboxType('voice'); setAnalyzing(false); }}
+          className={`tab-btn ${sandboxType === 'voice' ? 'active' : ''}`}
+          style={{ padding: '6px 10px', fontSize: '11.5px', flex: '1' }}
+        >
+          <Mic size={13} />
+          <span>Voice</span>
         </button>
       </div>
 
@@ -2215,15 +2331,24 @@ export default function Playground({ settings }: PlaygroundProps) {
                 )}
                 {videoResults.audio?.active && (
                   <div className="glass" style={{ padding: '10px' }}>
-                    <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>AUDIO TRACK · REPORTED, NOT SCORED</div>
-                    <div style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-secondary)' }}>
-                      {videoResults.audio.kind ?? '—'}
+                    <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
+                      VOICE IN THIS VIDEO · SEPARATE AXIS
+                    </div>
+                    <div style={{ fontSize: '16px', fontWeight: '700', color: videoResults.audio.voice?.score == null ? 'var(--text-secondary)' : videoResults.audio.voice.score >= 55 ? 'var(--danger)' : 'var(--success)' }}>
+                      {videoResults.audio.voice?.score != null
+                        ? `${videoResults.audio.voice.score}% ${videoResults.audio.voice.label || 'voice AI'}`
+                        : (videoResults.audio.kind ?? '—')}
                     </div>
                     <div style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>
                       {(videoResults.audio.duration_s ?? 0).toFixed(1)}s ·{' '}
                       bandwidth {(((videoResults.audio.metrics?.bandwidth_hz_99 ?? 0) / 1000)).toFixed(1)} kHz ·{' '}
                       {(((videoResults.audio.metrics?.hf_share_8k ?? 0) * 100)).toFixed(1)}% above 8 kHz
                     </div>
+                    {videoResults.audio.voice?.score == null && videoResults.audio.voice?.reasons?.[0] && (
+                      <div style={{ fontSize: '9.5px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                        {videoResults.audio.voice.reasons[0]}
+                      </div>
+                    )}
                   </div>
                 )}
                 {videoResults.audio && videoResults.audio.active === false && (
@@ -2277,6 +2402,182 @@ export default function Playground({ settings }: PlaygroundProps) {
                 </div>
               </div>
 
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* VOICE / SYNTHETIC-SPEECH PANEL */}
+      {sandboxType === 'voice' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: '1', minHeight: '0' }}>
+
+          <div className="glass" style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <input
+                className="input-text"
+                placeholder="Voice URL (audio or video file) or upload a recording"
+                value={voiceFile ? `Uploaded: ${voiceFile.name}` : voiceUrl}
+                onChange={(e) => { setVoiceUrl(e.target.value); setVoiceFile(null); }}
+                disabled={analyzing}
+                style={{ fontSize: '12px' }}
+              />
+              <button
+                onClick={() => voiceFileInputRef.current?.click()}
+                className="btn btn-secondary"
+                style={{ padding: '8px 12px', whiteSpace: 'nowrap', fontSize: '11.5px' }}
+                disabled={analyzing}
+              >
+                Upload File
+              </button>
+              <input
+                type="file"
+                ref={voiceFileInputRef}
+                onChange={handleUploadVoiceFile}
+                accept="audio/*,video/*"
+                style={{ display: 'none' }}
+              />
+            </div>
+
+            {(voiceFile || /^(blob:|https?:).*\.(mp3|wav|m4a|ogg|aac|flac|mp4|webm|mov)(\?|$)/i.test(voiceUrl)) && voiceUrl && (
+              <audio controls src={voiceUrl} style={{ width: '100%', height: '32px' }} />
+            )}
+
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10.5px' }}>
+              <span style={{ color: 'var(--text-muted)' }}>
+                Mode:{' '}
+                <strong style={{ color: 'var(--success)' }}>
+                  CLOUD — voice evidence scoring (audio track is decoded server-side)
+                </strong>
+              </span>
+            </div>
+
+            <button
+              onClick={() => handleAnalyzeVoice()}
+              className="btn btn-primary"
+              style={{ width: '100%', padding: '9px' }}
+              disabled={analyzing || !voiceUrl}
+            >
+              <Mic size={13} />
+              <span>{analyzing ? 'Decoding Audio & Measuring Voice Signals...' : 'Analyze Voice'}</span>
+            </button>
+          </div>
+
+          {analyzing && (
+            <div className="glass scan-animation-danger" style={{ padding: '24px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+              <Mic size={24} className="pulse-glow" style={{ color: 'var(--primary)', margin: '0 auto 8px' }} />
+              <p style={{ fontSize: '12px' }}>Decoding the audio track and measuring bandwidth, silence gaps, pitch contour and noise floor...</p>
+            </div>
+          )}
+
+          {voiceError && !analyzing && (
+            <div className="glass" style={{ padding: '12px', border: '1px solid rgba(239,68,68,0.35)', background: 'rgba(239,68,68,0.06)', fontSize: '11.5px', color: 'var(--text-secondary)', lineHeight: '1.5' }}>
+              <div style={{ fontWeight: '700', color: 'var(--danger)', marginBottom: '4px' }}>Voice analysis could not run</div>
+              <div>{voiceError}</div>
+            </div>
+          )}
+
+          {voiceResults && !analyzing && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto', flex: '1', paddingRight: '2px' }}>
+
+              {/* Verdict card */}
+              <div className="glass" style={{ padding: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '15px', fontWeight: '800', color: voiceResults.score === null ? 'var(--text-muted)' : voiceResults.score >= 55 ? 'var(--danger)' : 'var(--success)' }}>
+                      {voiceResults.score === null ? 'NO VOICE VERDICT' : (voiceResults.label || 'Voice verdict')}
+                    </span>
+                    {voiceResults.confidence && voiceResults.score !== null && (
+                      <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', background: 'rgba(15,23,42,0.06)', color: 'var(--text-secondary)', fontWeight: '700' }}>
+                        {voiceResults.confidence} CONFIDENCE
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '3px' }}>
+                    {voiceResults.kind === 'speech'
+                      ? 'Voice reported on its own axis — never folded into the image/video tier'
+                      : 'No speech in this audio, so no voice score is drawn'}
+                  </div>
+                </div>
+
+                <div style={{ textAlign: 'right' }}>
+                  <span style={{ fontSize: '24px', fontWeight: '800', color: voiceResults.score === null ? 'var(--text-muted)' : voiceResults.score >= 55 ? 'var(--danger)' : 'var(--success)' }}>
+                    {voiceResults.score === null ? '—' : `${voiceResults.score}%`}
+                  </span>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Voice AI Probability</div>
+                </div>
+              </div>
+
+              {/* Signal breakdown */}
+              {voiceResults.signals && voiceResults.signals.length > 0 && (
+                <div className="glass" style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <h4 style={{ fontSize: '12px', fontWeight: '700', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                    Voice Signal Breakdown
+                  </h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    {voiceResults.signals.map((s) => (
+                      <div key={s.id} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                        <span style={{ minWidth: '34px', textAlign: 'right', fontWeight: '700', color: s.contribution > 0 ? 'var(--danger)' : 'var(--success)' }}>
+                          {s.contribution > 0 ? '+' : ''}{s.contribution}
+                        </span>
+                        <span><strong>{s.label}</strong> — {s.detail}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Voice metrics */}
+              {voiceResults.metrics && voiceResults.score !== null && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
+                  <div className="glass" style={{ padding: '10px' }}>
+                    <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>EFFECTIVE BANDWIDTH</div>
+                    <div style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-primary)' }}>
+                      {voiceResults.metrics.bandwidth_hz_99 ? `${(voiceResults.metrics.bandwidth_hz_99 / 1000).toFixed(1)} kHz` : '—'}
+                    </div>
+                    <div style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>99% of spectral energy</div>
+                  </div>
+                  <div className="glass" style={{ padding: '10px' }}>
+                    <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>DIGITAL-SILENCE GAPS</div>
+                    <div style={{ fontSize: '16px', fontWeight: '700', color: (voiceResults.metrics.digital_silence_fraction || 0) >= 0.1 ? 'var(--danger)' : 'var(--text-primary)' }}>
+                      {((voiceResults.metrics.digital_silence_fraction || 0) * 100).toFixed(0)}%
+                    </div>
+                    <div style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>frames below -70 dBFS</div>
+                  </div>
+                  <div className="glass" style={{ padding: '10px' }}>
+                    <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>PITCH VARIATION</div>
+                    <div style={{ fontSize: '16px', fontWeight: '700', color: (voiceResults.metrics.f0_std_semitones ?? 99) < 1.5 ? 'var(--danger)' : 'var(--text-primary)' }}>
+                      {voiceResults.metrics.f0_std_semitones !== null && voiceResults.metrics.f0_std_semitones !== undefined ? `${voiceResults.metrics.f0_std_semitones.toFixed(2)} st` : '—'}
+                    </div>
+                    <div style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>
+                      median {voiceResults.metrics.f0_median_hz ? `${Math.round(voiceResults.metrics.f0_median_hz)} Hz` : '—'} · {(voiceResults.metrics.voiced_fraction || 0) * 100 ? `${((voiceResults.metrics.voiced_fraction || 0) * 100).toFixed(0)}% voiced` : 'no voiced frames'}
+                    </div>
+                  </div>
+                  <div className="glass" style={{ padding: '10px' }}>
+                    <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>NOISE FLOOR</div>
+                    <div style={{ fontSize: '16px', fontWeight: '700', color: (voiceResults.metrics.noise_floor_dbfs ?? 0) <= -65 ? 'var(--danger)' : 'var(--text-primary)' }}>
+                      {voiceResults.metrics.noise_floor_dbfs !== null && voiceResults.metrics.noise_floor_dbfs !== undefined ? `${voiceResults.metrics.noise_floor_dbfs.toFixed(1)} dBFS` : '—'}
+                    </div>
+                    <div style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>quietest 5% of frames</div>
+                  </div>
+                </div>
+              )}
+
+              {/* Evidence lines */}
+              {voiceResults.reasons && voiceResults.reasons.length > 0 && (
+                <div className="glass" style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <h4 style={{ fontSize: '12px', fontWeight: '700', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                    Voice Evidence
+                  </h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    {voiceResults.reasons.map((r: string, idx: number) => (
+                      <div key={idx} style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', gap: '6px' }}>
+                        <span style={{ color: 'var(--primary)' }}>•</span>
+                        <span>{r}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

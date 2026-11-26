@@ -110,6 +110,7 @@ def _restrict_clients():
 API_KEY = os.environ.get("API_KEY") or os.environ.get("BEARER_TOKEN") or ""
 MAX_IMAGE_BYTES = 20 * 1024 * 1024  # 20 MB cap for uploaded/downloaded images
 MAX_VIDEO_BYTES = 150 * 1024 * 1024  # 150 MB cap for uploaded/downloaded videos
+MAX_AUDIO_BYTES = 60 * 1024 * 1024   # 60 MB cap for uploaded/downloaded audio (or video, for its audio track)
 MAX_VIDEO_FRAMES = 32               # contiguous frames per analyzed shot window
 
 # ---------------------------------------------------------------------------
@@ -1355,6 +1356,7 @@ from forensics.learned_image import analyze_learned_image
 from forensics import rppg as _rppg
 from forensics import temporal_residual as _tr
 from forensics import audio_track as _audio
+from forensics import voice as _voice
 from forensics import capture_origin as _capture_origin
 from forensics import camera_physics as _camera_physics
 from forensics import embedding_consistency as _embedding
@@ -1777,6 +1779,22 @@ def _analyze_video_frames(loaded_frames, mode="video_deep", frame_interval_secon
     # abstains honestly when there are no bytes (client-extracted frames carry
     # no container audio) or no audio stream, and never fabricates a reading.
     s_audio = _audio.analyze_audio_track(audio_bytes if audio_bytes is not None else video_bytes)
+    # Scored voice sibling (forensics/voice.py): the audio axis gets its own
+    # verdict - including for a real clip carrying a synthetic voiceover - but
+    # it still never votes on the video tier. It abstains when there is no
+    # speech, so music/ambience/silence cannot fabricate a voice reading.
+    try:
+        s_audio["voice"] = _voice.score_layer(s_audio)
+    except Exception as e:  # noqa: BLE001 - a voice failure must not break video
+        s_audio["voice"] = {
+            "score": None,
+            "label": "No voice verdict",
+            "tier": "INCONCLUSIVE",
+            "confidence": "LOW",
+            "active": False,
+            "signals": [],
+            "reasons": [f"Voice layer inactive: analysis failed ({e})."],
+        }
 
     active_pwtf_idxs = [
         i for i, s in enumerate(per_window_pwtf)
@@ -2544,6 +2562,107 @@ def _cached_video_deep(data):
     return jsonify(resp), status
 
 
+def _download_media_bytes(url: str, timeout: int = 30) -> bytes:
+    """Stream an audio/video URL to bytes with the audio size cap. Raises on failure."""
+    headers = {"User-Agent": "RINSEAuthenticityDetector/2.0"}
+    resp = requests.get(url, headers=headers, timeout=timeout, stream=True)
+    if not resp.ok:
+        resp.close()
+        raise requests.HTTPError(f"HTTP {resp.status_code} for {url}")
+    chunks = []
+    total = 0
+    for chunk in resp.iter_content(chunk_size=64 * 1024):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > MAX_AUDIO_BYTES:
+            resp.close()
+            raise ValueError("Media download too large for voice analysis.")
+        chunks.append(chunk)
+    resp.close()
+    return b"".join(chunks)
+
+
+def _load_audio_bytes(data: dict):
+    """Resolve the voice payload to raw bytes (audio OR video container).
+
+    Accepts `audio_base64` (data URI or bare base64) or `audio_url`. A video
+    URL/file is valid input: ffmpeg extracts its first audio stream, so "hear
+    the voice in this video" needs no separate extraction step on the client.
+    Social-platform page links go through yt-dlp, same as the video path.
+
+    Returns: (raw_bytes, error_tuple).
+    """
+    audio_b64 = data.get("audio_base64") or ""
+    audio_url = data.get("audio_url") or ""
+
+    if not audio_b64 and not audio_url:
+        return None, (jsonify({
+            "error": "No audio source provided. Set 'audio_base64' (audio or video file) or 'audio_url'."
+        }), 400)
+
+    if audio_b64:
+        if len(audio_b64) > MAX_AUDIO_BYTES * 2:
+            return None, (jsonify({"error": "Audio payload too large (60MB limit)."}), 413)
+        try:
+            payload = audio_b64.split(",", 1)[-1] if "," in audio_b64 else audio_b64
+            raw_bytes = base64.b64decode(payload)
+        except Exception:
+            return None, (jsonify({"error": "Invalid base64 audio payload."}), 400)
+        if len(raw_bytes) > MAX_AUDIO_BYTES:
+            return None, (jsonify({"error": "Audio payload exceeds the 60MB limit."}), 413)
+        return raw_bytes, None
+
+    parsed = urlparse(audio_url)
+    if parsed.scheme not in ("http", "https"):
+        return None, (jsonify({"error": "Invalid audio URL: only http(s) sources are allowed."}), 400)
+
+    try:
+        if _looks_like_social_page(audio_url):
+            media_bytes, err = _ytdlp_download(audio_url)
+            if media_bytes is None:
+                return None, (jsonify({"error": err or "Could not download this link."}), 422)
+            return media_bytes, None
+        try:
+            return _download_media_bytes(audio_url), None
+        except Exception as direct_err:  # noqa: BLE001
+            # A page URL (not a direct media link) cannot be streamed as bytes;
+            # yt-dlp resolves it when installed. Without yt-dlp, report the
+            # direct-fetch failure honestly.
+            media_bytes, ytdlp_err = _ytdlp_download(audio_url)
+            if media_bytes is not None:
+                return media_bytes, None
+            hint = (" If this is a social-media page, install yt-dlp on the server "
+                    "(pip install -U yt-dlp); otherwise paste a direct audio/video "
+                    "link or upload the file.")
+            return None, (jsonify({
+                "error": f"Could not fetch this URL: {direct_err}.{hint}",
+                "hint": ytdlp_err,
+            }), 422)
+    except Exception as e:  # noqa: BLE001
+        return None, (jsonify({"error": f"Could not resolve the audio source: {e}"}), 422)
+
+
+def _run_audio_deep(raw_bytes: bytes):
+    """Full voice pipeline on resolved bytes; returns (verdict, status)."""
+    return _voice.analyze_voice(raw_bytes), 200
+
+
+def _cached_audio_deep(raw_bytes: bytes, data: dict):
+    """Voice path with exact-hash scan caching (no near-dup layer)."""
+    started = time.time()
+    resp, status = _cache_lookup_or_run(
+        raw_bytes, "audio", lambda: _run_audio_deep(raw_bytes),
+        no_cache=_no_cache_requested(data), key_namespace="audio:deep",
+    )
+    _record_scan(
+        "audio", "audio/deep", resp, status,
+        cached=resp.get("cached") if isinstance(resp, dict) else None,
+        content=raw_bytes, source_url=data.get("audio_url"), started=started,
+    )
+    return jsonify(resp), status
+
+
 def _image_page_context(data: dict):
     """Extract page-declared AI-provenance context from an image payload.
 
@@ -2618,7 +2737,7 @@ def health():
         "cache_enabled": _CACHE_ENABLED,
         "scan_log_enabled": bool(scan_log is not None and scan_log.ENABLED),
         "auth_required": bool(API_KEY),
-        "layers": ["synthid", "c2pa", "frequency", "neural", "learned", "temporal", "pwtf", "d3", "capture_origin", "camera_physics", "embedding"],
+        "layers": ["synthid", "c2pa", "frequency", "neural", "learned", "temporal", "pwtf", "d3", "capture_origin", "camera_physics", "embedding", "audio", "voice"],
         "endpoints": [
             "/predict", "/predict/image/fast", "/predict/image/deep",
             "/predict/video/deep", "/predict/storyscope", "/predict/text/dna",
@@ -2674,7 +2793,7 @@ def scans_recent_endpoint():
 
     Query params:
       limit=50          rows to return (max 500)
-      kind=text|image|video
+      kind=text|image|video|audio
       human=1           only verdicts that cleared as human / authentic
       include_text=1    include the stored text excerpt
       since=<epoch>     only scans at or after this Unix timestamp
@@ -3086,6 +3205,33 @@ def predict_video_deep():
 
     data = request.get_json() or {}
     return _cached_video_deep(data)
+
+
+@app.route("/predict/audio/deep", methods=["POST"])
+def predict_audio_deep():
+    """Voice / synthetic-speech detection on audio bytes.
+
+    Accepts two payload shapes:
+      { "audio_base64": "<base64 of an audio OR video file>" }  - device
+        upload; ffmpeg decodes the first audio stream, so a video is valid
+        input and its voice track is what gets judged.
+      { "audio_url": "https://.../voice.mp3" }                 - direct audio
+        or video link; social-platform page links are resolved with yt-dlp.
+
+    The verdict scores the VOICE on its own axis (0-100 AI-voice probability
+    from band-limit, low-pass edge, digital-silence, pitch-flatness and noise-
+    floor evidence). It is a documented heuristic, not a trained TTS detector,
+    and abstains (`score: null`) on silence or non-speech audio.
+    """
+    if not _check_auth():
+        return jsonify({"error": "Unauthorized: missing or invalid Bearer token."}), 401
+
+    data = request.get_json() or {}
+    raw_bytes, err = _load_audio_bytes(data)
+    if err:
+        return err
+    return _cached_audio_deep(raw_bytes, data)
+
 
 # ---------------------------------------------------------------------------
 # StoryScope: narrative-feature AI fiction detection

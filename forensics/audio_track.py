@@ -80,6 +80,18 @@ _FFT_SIZE = 1024
 _NARROW_BAND_HZ = 4000.0         # below this the "narrow-band" lead is stated
 _NARROW_HF_SHARE = 0.005         # and only when almost nothing sits above 8 kHz
 
+# Pitch tracking (autocorrelation) and the two TTS-lead measurements used by
+# forensics/voice.py. All are measurements, not a synthetic-speech verdict.
+_PITCH_FRAME_S = 0.040
+_PITCH_HOP_S = 0.020
+_PITCH_MAX_FRAMES = 1500         # ~30 s at a 20 ms hop; longer tracks sample evenly
+_F0_MIN_HZ = 60.0
+_F0_MAX_HZ = 500.0
+_PITCH_MIN_DBFS = -45.0          # frames quieter than this are unvoiced
+_MIN_PITCH_CORR = 0.35           # normalized autocorrelation peak for a voiced frame
+_DIGITAL_SILENCE_DBFS = -70.0    # decoded PCM silence (TTS gaps) has no noise floor
+_EDGE_PROBE_HZ = 500.0           # energy just below vs just above the 99% bandwidth
+
 
 @dataclass
 class AudioTrack:
@@ -277,8 +289,19 @@ def _spectral_stats(x: "np.ndarray", sample_rate: int) -> Dict[str, float]:
         mask = (freqs >= low) & (freqs <= high)
         return float(mean_power[mask].sum() / total) if mask.any() else 0.0
 
+    # Low-pass edge ratio: energy in the 500 Hz just BELOW the 99% bandwidth
+    # against the 500 Hz just ABOVE it. A codec/vocoder low-pass leaves a
+    # cliff (ratio >> 1); a natural recording rolls off gradually. Measured,
+    # reported, never scored on its own.
+    edge_ratio = 0.0
+    lo = (freqs >= max(0.0, bandwidth_99 - _EDGE_PROBE_HZ)) & (freqs < bandwidth_99)
+    hi = (freqs >= bandwidth_99) & (freqs <= bandwidth_99 + _EDGE_PROBE_HZ)
+    if lo.any() and hi.any():
+        edge_ratio = float(mean_power[lo].sum() / max(mean_power[hi].sum(), 1e-12))
+
     return {
         "bandwidth_hz_99": round(bandwidth_99, 1),
+        "lowpass_edge_ratio": round(min(edge_ratio, 999.0), 2),
         "hf_share_8k": round(_share_above(8000.0), 5),
         "hf_share_16k": round(_share_above(16000.0), 5),
         "speech_band_share": round(_share_between(300.0, 3400.0), 4),
@@ -320,6 +343,67 @@ def _envelope_stats(rms: "np.ndarray") -> Dict[str, float]:
     out["syllabic_peak_hz"] = round(
         float(freqs[band_mask][int(np.argmax(band))]) if band.size else 0.0, 2)
     return out
+
+
+def _pitch_stats(x: "np.ndarray", sample_rate: int) -> Dict[str, float]:
+    """Autocorrelation pitch track: how much pitch range does the voice show?
+
+    Expressive human speech swings across several semitones; concatenative /
+    neural TTS is often markedly flatter. That is a LEAD (monotone delivery
+    exists in real speech too), so the value is reported, and only a strongly
+    flattened track contributes to the voice score in forensics/voice.py.
+
+    Each frame is mean-removed and autocorrelated through an FFT (n_fft is
+    twice the frame so the circular wrap never reaches the lags we read).
+    """
+    frame_len = int(_PITCH_FRAME_S * sample_rate)
+    hop = int(_PITCH_HOP_S * sample_rate)
+    n = x.size
+    if n < frame_len or frame_len <= 0:
+        return {}
+    starts = list(range(0, n - frame_len + 1, hop))
+    if len(starts) > _PITCH_MAX_FRAMES:
+        stride = len(starts) / _PITCH_MAX_FRAMES
+        starts = [starts[int(i * stride)] for i in range(_PITCH_MAX_FRAMES)]
+
+    lag_min = max(1, int(sample_rate / _F0_MAX_HZ))
+    lag_max = min(frame_len - 1, int(sample_rate / _F0_MIN_HZ))
+    if lag_max <= lag_min:
+        return {}
+
+    n_fft = 1
+    while n_fft < 2 * frame_len:
+        n_fft <<= 1
+
+    f0s = []
+    for s in starts:
+        frame = x[s:s + frame_len].astype(np.float64)
+        if float(np.sqrt(np.mean(frame ** 2))) <= 10.0 ** (_PITCH_MIN_DBFS / 20.0):
+            continue
+        frame = frame - frame.mean()
+        spectrum = np.fft.rfft(frame, n=n_fft)
+        ac = np.fft.irfft(np.abs(spectrum) ** 2, n=n_fft)[:frame_len]
+        if ac[0] <= 1e-12:
+            continue
+        ac = ac / ac[0]
+        lag = lag_min + int(np.argmax(ac[lag_min:lag_max + 1]))
+        if ac[lag] < _MIN_PITCH_CORR:
+            continue
+        f0s.append(sample_rate / lag)
+
+    frames = len(starts)
+    if not f0s or frames == 0:
+        return {"voiced_fraction": 0.0}
+    f0 = np.asarray(f0s, dtype=np.float64)
+    median = float(np.median(f0))
+    semitones = 12.0 * np.log2(np.maximum(f0, 1e-6) / max(median, 1e-6))
+    return {
+        "voiced_fraction": round(len(f0s) / frames, 4),
+        "f0_median_hz": round(median, 1),
+        "f0_std_semitones": round(float(np.std(semitones)), 3),
+        "f0_range_semitones": round(
+            float(np.percentile(semitones, 95) - np.percentile(semitones, 5)), 3),
+    }
 
 
 def analyze_track(track: AudioTrack) -> Dict[str, Any]:
@@ -377,13 +461,20 @@ def analyze_track(track: AudioTrack) -> Dict[str, Any]:
     silence_fraction = round(1.0 - active_fraction, 4)
     zcr_active = float(np.mean(frame_zcr[active_mask])) if active_mask.any() else 0.0
 
+    # Noise floor + digital-silence share. A real recording has an audible
+    # floor in the gaps between words; TTS rendered to PCM often has exact
+    # zeros, and a gated/cleaned studio voice has a floor far below anything
+    # a microphone produces. Both are leads for forensics/voice.py.
     metrics.update({
         "active_fraction": round(active_fraction, 4),
         "silence_fraction": silence_fraction,
         "zero_crossing_rate_mean": round(zcr_active, 4),
+        "noise_floor_dbfs": round(float(np.percentile(frame_db, 5)), 1),
+        "digital_silence_fraction": round(float(np.mean(frame_db < _DIGITAL_SILENCE_DBFS)), 4),
     })
     metrics.update(_spectral_stats(x, sr))
     metrics.update(_envelope_stats(frame_rms))
+    metrics.update(_pitch_stats(x, sr))
 
     env_cv = float(metrics.get("envelope_cv") or 0.0)
     mod_share = float(metrics.get("syllabic_energy_share") or 0.0)

@@ -87,7 +87,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS scans (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at     REAL NOT NULL,
-  kind           TEXT NOT NULL,               -- text | image | video
+  kind           TEXT NOT NULL,               -- text | image | video | audio
   source         TEXT NOT NULL,               -- endpoint, e.g. image/deep
   status         INTEGER NOT NULL,            -- HTTP status of the response
   cached         TEXT,                        -- NULL (fresh) | 'exact' | 'near'

@@ -33,13 +33,14 @@ Video needs `ffmpeg` on `PATH` (`pip install -U yt-dlp` as well for social links
 | `/predict/image/fast` | POST | Cheap image path (<100 ms): SynthID, C2PA, AI-metadata, frequency forensics |
 | `/predict/image/deep`, `/predict`, `/v1/predict` | POST | Full image fusion: every spatial layer + the dataset-trained heads |
 | `/predict/video/deep` | POST | Full video fusion: spatial + temporal + pixel-wise temporal frequency + audio axis |
+| `/predict/audio/deep` | POST | Voice / synthetic-speech detection (`{"audio_base64": "..."}` or `{"audio_url": "..."}`; audio **or video** file) |
 | `/predict/storyscope` | POST | Narrative-structure AI-fiction detection (`{"text": "..."}`) |
 | `/predict/text/dna` | POST | DNA-DetectLLM zero-shot AI-text detection (`{"text": "..."}`) |
 | `/predict/synthid/probe` | GET/POST | Layer-1 watermark probe in isolation |
 | `/cache/stats`, `/cache/clear` | GET/POST | Scan-cache inspection and reset |
 | `/scans/stats`, `/scans/recent`, `/scans/export` | GET | Scan-log queries (see [Scan log](#scan-log-every-scan-in-sqlite)) |
 
-Image payloads accept `image_base64` (data URI or bare base64) or `image_url`. Video payloads accept `video_base64`, `video_url` (direct file **or** a social-platform link resolved with yt-dlp), or `frames_base64` with a mandatory `frame_interval_seconds`. Pass `"no_cache": true` to force a fresh computation.
+Image payloads accept `image_base64` (data URI or bare base64) or `image_url`. Video payloads accept `video_base64`, `video_url` (direct file **or** a social-platform link resolved with yt-dlp), or `frames_base64` with a mandatory `frame_interval_seconds`. Voice payloads accept `audio_base64` / `audio_url` and take an audio **or video** container — ffmpeg extracts the first audio stream, so a video is valid voice input. Pass `"no_cache": true` to force a fresh computation.
 
 ```bash
 curl -s -X POST http://localhost:5001/predict/image/deep \
@@ -292,7 +293,26 @@ Video scans also decode and measure the clip's **audio track** (`forensics/audio
 
 What it reports: duration, sample rate, loudness (RMS/peak dBFS), active/silent frame fractions, zero-crossing rate, **effective bandwidth** (99% energy), high-frequency share above 8/16 kHz, spectral centroid and flatness, loudness-envelope dynamics, and syllable-rate (2–8 Hz) modulation. `audio.kind` is `speech` / `nonspeech` / `silence` / `unavailable`.
 
-**Honest limits, by design:** `speech` comes from energy/periodicity heuristics (a swinging loudness envelope, 2–8 Hz modulation, energy in the 300–3400 Hz speech band), not a speech classifier — strongly rhythmic music can satisfy it, which is why a low tremolo tone with no speech-band energy is correctly reported as `nonspeech`. And a **narrow bandwidth is a lead, not evidence**: it is common in vocoder/TTS re-synthesis, but lossy music and older recordings share the signature (measured: a real local clip reads 3.2 kHz while an AI reel reads 1.4 kHz). Synthetic-speech *detection* and AV lip-sync are not implemented yet; they arrive behind flags after calibration on a real-vs-TTS corpus. Check the layer with `.venv/bin/python scripts/check_audio_track.py`.
+**Honest limits, by design:** `speech` comes from energy/periodicity heuristics (a swinging loudness envelope, 2–8 Hz modulation, energy in the 300–3400 Hz speech band), not a speech classifier — strongly rhythmic music can satisfy it, which is why a low tremolo tone with no speech-band energy is correctly reported as `nonspeech`. And a **narrow bandwidth is a lead, not evidence**: it is common in vocoder/TTS re-synthesis, but lossy music and older recordings share the signature (measured: a real local clip reads 3.2 kHz while an AI reel reads 1.4 kHz). Check the layer with `.venv/bin/python scripts/check_audio_track.py`.
+
+### Voice / synthetic-speech detection (audio input)
+
+`POST /predict/audio/deep` judges the **voice itself** — an uploaded recording, a voice note, or the audio track of a video. It is the scored sibling of the audio-track layer (`forensics/voice.py`), and the same voice verdict is attached to every video verdict as `audio.voice` (`score` is `null` only when there is nothing to judge).
+
+Payloads: `{"audio_base64": "..."}` or `{"audio_url": "..."}`. Both accept an audio file (WAV, MP3, M4A, OGG, FLAC, …) **or a video file/link** — the server decodes the first audio stream with ffmpeg, so "what does the voice in this video sound like?" is one request. Social-platform links go through yt-dlp like the video path; the cap is 60 MB.
+
+| Signal | Direction | Why |
+| --- | --- | --- |
+| Band-limited spectrum (99% energy < 8 kHz, ~nothing above 8 kHz) | +18 | Neural vocoders synthesize at 16/22.05/24 kHz; microphone capture keeps energy higher |
+| Hard low-pass cliff at the edge | +12 | Synthesis/codec edge vs a gradual room+mic rolloff |
+| Digital-silence gaps (frames below −70 dBFS) | +16 | Rendered TTS has exact-zero gaps; a microphone always records room tone/breath |
+| Flattened pitch contour (autocorrelation F0, std < 1.5 semitones) | +16 | Concatenative/neural TTS is often flatter than expressive speech |
+| No audible room/mic floor (quietest frames ≤ −65 dBFS) | +10 | Real rooms and microphones have a floor |
+| Full bandwidth + expressive pitch + audible floor | −14 / −14 / −8 | Human-capture evidence |
+
+Base score 30, clamp 2–98; `tier` uses the same bands as the other paths. The response carries the per-signal breakdown (`signals`), the raw metrics (bandwidth, edge ratio, silence share, F0 median/std, noise floor) and plain-language `reasons`, so the number is auditable.
+
+**Limits:** this is an evidence-weighted heuristic, **not a trained TTS/speaker classifier**, and it is not yet calibrated against a real-vs-TTS corpus. It abstains (`score: null`) on silence, music/ambience and clips shorter than ~1 s, and it deliberately never folds the voice score into the image/video tier — a real clip with a synthetic voiceover is an audio-AI finding, not a deepfake video. AV lip-sync is still not implemented.
 
 ### D3 second-order dynamics: metrics layer (ICCV 2025, direction-corrected)
 
@@ -405,10 +425,12 @@ StoryScope's taxonomy, extraction prompts and dataset are by Jenna Russell, Rish
 | `VIDEO_STRICT` | `1` | Recall-biased video escalation; `0` restores calibrated behaviour |
 | `VIDEO_COVERAGE_MAX_FRAMES` | `384` | Coverage-sweep frame budget |
 | `VIDEO_COVERAGE_MAX_WINDOWS` | `8` | Coverage-sweep window cap |
+| `VOICE_DETECTION` | `1` | Set `0` to disable the scored voice layer (and `/predict/audio/deep`, which then abstains) |
+| `VOICE_MAX_SECONDS` | `120` | Decoded-audio cap for voice analysis (via `AUDIO_MAX_SECONDS`) |
 
 ## Scan log: every scan in SQLite
 
-The scan cache answers "have I seen this before?". The scan log answers the other question: *what has the detector been asked to judge, and what did it say?* Every text, image and video scan the server serves — cache hit or miss, success or detector failure — is recorded in SQLite by [`forensics/scan_log.py`](forensics/scan_log.py).
+The scan cache answers "have I seen this before?". The scan log answers the other question: *what has the detector been asked to judge, and what did it say?* Every text, image, video and voice scan the server serves — cache hit or miss, success or detector failure — is recorded in SQLite by [`forensics/scan_log.py`](forensics/scan_log.py).
 
 **Storage.** Stdlib `sqlite3`, one file: `cache/scan_log.db` (override the directory with `SCAN_LOG_DIR`). WAL journal mode, one short-lived connection per operation, no new dependency and no extra service. It sits next to `cache/scan_cache.db` and follows the same rules: the write path is best-effort and a logging failure can never turn a good scan into an error response.
 
